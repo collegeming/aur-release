@@ -1,0 +1,90 @@
+name: aur-update
+
+on:
+  schedule:
+    # Every 6 hours; upstream releases ~weekly, so this is more than enough.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package directory (relative to packages/; leave empty for all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Discover packages
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.ls.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ls
+        shell: bash
+        run: |
+          selected="${{ github.event.inputs.package }}"
+          if [ -n "$selected" ]; then
+            echo "packages=[\"$selected\"]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dirs=$(find packages -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "packages=${dirs:-[]}" >> "$GITHUB_OUTPUT"
+
+  update:
+    name: "Update ${{ matrix.package }}"
+    needs: discover
+    if: needs.discover.outputs.packages != '' && needs.discover.outputs.packages != '[]'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux/archlinux:base-devel
+    # Per-package lock: parallel jobs touch different AUR repos, but a schedule
+    # and a manual run targeting the same package must not push concurrently.
+    concurrency:
+      group: aur-update-${{ matrix.package }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.discover.outputs.packages) }}
+    steps:
+      - name: Install tooling
+        run: |
+          # nodejs is required by the checkout action inside the container.
+          pacman -Sy --noconfirm --needed archlinux-keyring
+          pacman -Syu --noconfirm --needed git openssh python nodejs
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up AUR SSH key
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AUR_SSH_PRIVATE_KEY:-}" ]; then
+            echo "::warning::AUR_SSH_PRIVATE_KEY secret is empty; push will fail."
+          fi
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > "$HOME/.ssh/aur_ed25519"
+          chmod 600 "$HOME/.ssh/aur_ed25519"
+          # known_hosts: prefer the secret, fall back to the checked-in file.
+          if [ -n "${AUR_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "${AUR_KNOWN_HOSTS}" > "$HOME/.ssh/known_hosts"
+          elif [ -f tools/known_hosts ]; then
+            cp tools/known_hosts "$HOME/.ssh/known_hosts"
+          fi
+          if [ -f "$HOME/.ssh/known_hosts" ]; then
+            chmod 600 "$HOME/.ssh/known_hosts"
+          fi
+
+      - name: Update package
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/update_package.py update "packages/${{ matrix.package }}"

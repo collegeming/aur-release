@@ -1,0 +1,22 @@
+# aur-release package manifest for siyuan-unlock-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+
+pkgname = "siyuan-unlock-bin"
+
+# Maintainer identity used in the PKGBUILD header and as git commit author.
+maintainer = "You <you@example.com>"
+
+[upstream]
+owner = "appdev"
+repo = "siyuan-unlock"
+
+[tag]
+# Everything before the version digits is stripped: v3.8.1 -> 3.8.1
+strip_prefix = "v"
+
+[assets.x86_64]
+# {pkgver} is replaced with the stripped tag (e.g. 3.8.1)
+name = "siyuan-{pkgver}-linux.tar.gz"
+
+[assets.aarch64]
+name = "siyuan-{pkgver}-linux-arm64.tar.gz"
