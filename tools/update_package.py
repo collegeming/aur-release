@@ -436,8 +436,9 @@ def do_update(
     pkgbuild_text = render_pkgbuild(template, context)
     (workdir / "PKGBUILD").write_text(pkgbuild_text, encoding="utf-8")
     # The workdir is owned by root (mkdtemp); makepkg runs as an unprivileged
-    # user, so make the tree readable/traversable for it.
-    os.chmod(workdir, 0o755)
+    # user and pre-checks that $BUILDDIR (the cwd) is writable, so open it up.
+    # Ephemeral CI container, so 0777 is acceptable.
+    os.chmod(workdir, 0o777)
     (workdir / "PKGBUILD").chmod(0o644)
     srcinfo = srcinfo_via_makepkg(workdir / "PKGBUILD")
     (workdir / ".SRCINFO").write_text(srcinfo, encoding="utf-8")
