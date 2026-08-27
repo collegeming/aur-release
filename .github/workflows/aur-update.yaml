@@ -55,6 +55,8 @@ jobs:
           # nodejs is required by the checkout action inside the container.
           pacman -Sy --noconfirm --needed archlinux-keyring
           pacman -Syu --noconfirm --needed git openssh python nodejs
+          # makepkg refuses to run as root; the updater drops to this user.
+          useradd -m builder || true
 
       - name: Checkout
         uses: actions/checkout@v4

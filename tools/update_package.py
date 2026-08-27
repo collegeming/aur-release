@@ -179,18 +179,43 @@ def render_pkgbuild(template: str, context: dict[str, str]) -> str:
 # --------------------------------------------------------------------------- #
 # .SRCINFO generation
 # --------------------------------------------------------------------------- #
+def _is_root() -> bool:
+    return os.name == "posix" and getattr(os, "geteuid", lambda: -1)() == 0
+
+
+def _uid_of(user: str) -> int | None:
+    try:
+        import pwd
+        return pwd.getpwnam(user).pw_uid
+    except (ImportError, KeyError):
+        return None
+
+
 def srcinfo_via_makepkg(pkgbuild_path: Path) -> str:
     if not shutil.which("makepkg"):
         raise UpdateError("makepkg not found (needed to generate .SRCINFO)")
-    # makepkg refuses to run as root (EUID check fires before the
-    # --printsrcinfo branch). GitHub Actions `archlinux` containers default to
-    # root, so wrap it in fakeroot (ships with base-devel), which sets
-    # FAKEROOTKEY and routes makepkg into the fakeroot branch.
+    # makepkg's EUID check fires before the --printsrcinfo branch, so it will
+    # never run as root. GitHub Action `archlinux` containers run as root, so
+    # drop privileges to an unprivileged account for this one invocation:
+    # prefer the `builder` user created by the workflow (runuser), then
+    # setpriv/nobody, then fakeroot as a last resort (modern fakeroot >= 1.26
+    # no-ops when the real user is root — do not rely on it first).
     cmd = ["makepkg", "--printsrcinfo"]
-    if os.geteuid() == 0:
-        if not shutil.which("fakeroot"):
-            raise UpdateError("running as root but fakeroot is not installed")
-        cmd = ["fakeroot", *cmd]
+    if _is_root():
+        if shutil.which("runuser") and _uid_of("builder") is not None:
+            cmd = ["runuser", "-u", "builder", "--", *cmd]
+        elif shutil.which("setpriv"):
+            cmd = [
+                "setpriv", "--reuid=65534", "--regid=65534",
+                "--clear-groups", *cmd,
+            ]
+        elif shutil.which("fakeroot"):
+            cmd = ["fakeroot", *cmd]
+        else:
+            raise UpdateError(
+                "running as root and no privilege-dropping tool available "
+                "(create a `builder` user or install setpriv)"
+            )
     proc = subprocess.run(
         cmd,
         cwd=pkgbuild_path.parent,
@@ -410,6 +435,10 @@ def do_update(
 
     pkgbuild_text = render_pkgbuild(template, context)
     (workdir / "PKGBUILD").write_text(pkgbuild_text, encoding="utf-8")
+    # The workdir is owned by root (mkdtemp); makepkg runs as an unprivileged
+    # user, so make the tree readable/traversable for it.
+    os.chmod(workdir, 0o755)
+    (workdir / "PKGBUILD").chmod(0o644)
     srcinfo = srcinfo_via_makepkg(workdir / "PKGBUILD")
     (workdir / ".SRCINFO").write_text(srcinfo, encoding="utf-8")
 
