@@ -4,7 +4,7 @@
 pkgname = "siyuan-unlock-bin"
 
 # Maintainer identity used in the PKGBUILD header and as git commit author.
-maintainer = "You <you@example.com>"
+maintainer = "colegeming <collegeming@outlook.com>"
 
 [upstream]
 owner = "appdev"

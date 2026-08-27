@@ -428,7 +428,7 @@ def do_update(
         quiet,
         cwd=workdir,
     )
-    _run_git(["push", "origin", "HEAD"], env, quiet, cwd=workdir)
+    _run_git(["push", "origin", "HEAD:master"], env, quiet, cwd=workdir)
 
     print(f"{pkgbase}: pushed {newver}-{newrel}")
     shutil.rmtree(workdir, ignore_errors=True)

@@ -29,18 +29,23 @@ workflow 每 6 小时跑一次：对 `packages/` 下每个目录
 
 ## 首次接入一个新包
 
-**第 0 步（一次性）**：在 AUR 网页上以同名 pkgbase 提交一次，把仓库建出来。
-AUR 不允许 git push 创建新仓库，第一个 commit 必须经过网页提交（`metadata.toml`
-与 `PKGBUILD.template` 就绪后，先本地跑一次 render，把生成的文件手工提交上去）。
-之后的所有版本更新都由此仓库的 Action 自动推送。
+**不需要人工网页提交。** AUR 的 git 服务支持「push 到不存在的包名即自动建仓库」：
+`git clone ssh://aur@aur.archlinux.org/<pkgbase>.git` 一个尚不存在的包，会返回一个
+空的仓库（AUR 官方文档与 aurweb 源码的行为均如此）；往这个空仓库 push 第一个
+commit（含 `PKGBUILD` 与 `.SRCINFO`）后，包就在 AUR 上建立了。
+
+本仓库的 workflow 天然覆盖这个场景：脚本 clone 到空仓库、发现没有 PKGBUILD、走
+"Initial import" 分支提交建包。**唯一的前置条件是公钥已登记到 AUR 账号**（见下一节），
+无需打开 AUR 网页手工传文件。
 
 ```bash
-# 在任意安装了 Python 3.11+ 的机器上预览（本机即可，不需 Arch）
+# 想在 push 前人工核对产物，可本地渲染看一眼（本机即可，不需 Arch）
 python tools/update_package.py render packages/siyuan-unlock-bin --out _render
-# 把 _render/PKGBUILD 和 _render/.SRCINFO 提交到 AUR 网页
+# 产物在 _render/PKGBUILD 与 _render/.SRCINFO
 ```
 
-> 已由我们接手维护的包不需要这步——AUR 仓库已经存在，直接进入下面密钥配置即可。
+> 安全边界：脚本从不用 force-push（AUR 对非 TU 用户禁止 force-push），
+> 只做 fast-forward 线性追加；分支固定 `master`。
 
 ## 密钥 / AUR 账号配置（关键）
 
