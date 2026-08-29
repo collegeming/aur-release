@@ -425,7 +425,14 @@ def do_update(
     quiet: bool,
     git_env: dict[str, str] | None = None,
 ) -> int:
-    """Update a single AUR package. Returns 0 if pushed, 1 if already current."""
+    """Update a single AUR package.
+
+    Returns 0 if a new version was pushed, or 2 if the package is already
+    current / upstream is older (an idempotent, non-error skip). A genuine
+    failure raises UpdateError, which main() reports as exit 1 -- kept
+    distinct from 2 so the CI workflow can tell "nothing to do" (green) apart
+    from a real error (red).
+    """
     meta = load_manifest(pkg_dir)
     template = read_template(pkg_dir)
     pkgbase = meta["pkgname"]
@@ -453,14 +460,14 @@ def do_update(
         if cmp == 0:
             print(f"{pkgbase}: already at {oldver}-{oldrel}; nothing to do")
             shutil.rmtree(workdir, ignore_errors=True)
-            return 1
+            return 2
         if cmp < 0:
             print(
                 f"{pkgbase}: upstream {newver} is older than published "
                 f"{oldver}; skipping (manual intervention?)"
             )
             shutil.rmtree(workdir, ignore_errors=True)
-            return 1
+            return 2
         newrel = "1"
     else:
         newrel = "1"

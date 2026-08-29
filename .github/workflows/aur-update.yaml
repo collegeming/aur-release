@@ -88,5 +88,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           python tools/update_package.py update "packages/${{ matrix.package }}"
+          code=$?
+          # 0 -> a new version was pushed (green)
+          # 2 -> already up-to-date / upstream older, an idempotent skip (green)
+          # 1 -> a real error (network, makepkg, git push, ...) raised as
+          #      UpdateError by main(); this is the only red outcome
+          case "$code" in
+            0|2) exit 0 ;;
+            *)   exit "$code" ;;
+          esac
