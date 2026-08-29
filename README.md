@@ -3,7 +3,10 @@
 自动化跟踪多个上游 GitHub 仓库的 release，一有新版就重新生成 PKGBUILD +
 `.SRCINFO` 并推送到 AUR（Arch User Repository）。
 
-第一个接入的包是 [`siyuan-unlock-bin`](packages/siyuan-unlock-bin/)（源：[appdev/siyuan-unlock](https://github.com/appdev/siyuan-unlock)）。
+目前接入的包：
+
+- [`siyuan-unlock-bin`](packages/siyuan-unlock-bin/) — 源 [appdev/siyuan-unlock](https://github.com/appdev/siyuan-unlock)，跟踪 `releases/latest`（稳定版）。
+- [`snishaper-bin`](packages/snishaper-bin/) — 源 [SnishaperTeam/SniShaper](https://github.com/SnishaperTeam/SniShaper)，跟踪预发布（Linux 构建目前只在 beta 系列里）。
 
 ## 工作原理
 
@@ -19,9 +22,11 @@ tools/known_hosts                   # aur.archlinux.org 的 SSH host key（防�
 
 workflow 每 6 小时跑一次：对 `packages/` 下每个目录
 
-1. 调 GitHub API 取上游 `release/latest`，得到 tag 与各资产文件的 sha256
+1. 调 GitHub API 取上游 release（默认 `releases/latest`；`prerelease = true` 时列
+   `/releases` 取第一个含全部所需资产的），得到 tag 与各资产文件的 sha256
    （GitHub 对每个资产直接返回 `digest`，**无需下载 200MB+ 的二进制**去算校验和）；
-2. 把 tag 去掉前缀得到 `pkgver`，与 AUR 当前 PKGBUILD 中的版本用 `vercmp` 比较；
+2. 去掉 tag 前缀、按可选规则 `sanitize` 成合法 `pkgver`（不含连字符），与 AUR 当前
+   版本用 `vercmp` 比较；
 3. 若上游更新：用模板渲染出新 PKGBUILD，用 `makepkg --printsrcinfo` 生成 `.SRCINFO`；
 4. `git clone` AUR 仓库 → 提交 → push（AUR 禁止 force-push，只会线性追加）。
 
@@ -87,8 +92,24 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 ## 新增第二个包
 
 1. `packages/<pkg>/` 下新建 `metadata.toml` + `PKGBUILD.template`（照抄现成样例改）；
-2. 若 AUR 尚无该包，网页提交一次建仓库；
-3. 完事，下次 workflow 自动接管。
+2. 确保 `AUR_SSH_PRIVATE_KEY` 等 Secret 已配（公钥登记到 AUR 账号即可——首次 push
+   到不存在的包名会自动建仓库，**无需网页提交**，见上文「首次接入一个新包」）；
+3. 完事，下次 workflow 自动接管。想立刻验证可手动触发一次。
+
+### `metadata.toml` 选项
+
+| 字段 | 作用 |
+|---|---|
+| `pkgname` / `maintainer` | 包名与 PKGBUILD 头部维护者署名 |
+| `[upstream] owner` / `repo` | GitHub 上游仓库 |
+| `[upstream] prerelease` | `true` 时改用 `/releases` 列表，挑第一个含全部所需资产的新 release（含预发布）。用于「Linux 构建只在 beta 里」这类上游 |
+| `[tag] strip_prefix` | 去掉 tag 前缀，`v3.8.1 → 3.8.1` |
+| `[tag] sanitize` | `[正则, 替换]` 二元组，把 tag 进一步规整成合法 pkgver。`-` 在 pkgver 里非法，用它把 `1.29.0-beta.3` 收成 `1.29.0beta3`；按 vercmp 规则 `1.0beta < 1.0`，预发布天然排早于正式版，后续升正式版会被正确识别为新版本 |
+| `[assets.<arch>] name` | 各架构对应的 release 资产名模板，`{pkgver}` 会被替换 |
+
+模板占位符：`{{pkgver}}` `{{pkgrel}}` `{{maintainer}}` `{{tag}}`（去掉前缀前的原始 tag，
+用于 release 下载 URL，当 pkgver 经 `sanitize` 后与真实 tag 不同时用它）以及各架构
+的 `{{sha256_<arch>}}`。
 
 ## 本地验证（不碰 AUR）
 

@@ -86,6 +86,38 @@ def latest_release(owner: str, repo: str, token: str | None) -> dict:
     return api_get(url, token)
 
 
+def resolve_release(meta: dict, token: str | None) -> dict:
+    """Return the upstream release to package.
+
+    Default: GitHub's `releases/latest` (newest stable; prereleases excluded).
+    When `[upstream] prerelease = true`, list `/releases` and pick the newest
+    one whose configured assets are all present -- necessary when Linux builds
+    only ship in a prerelease series (the latest stable has no Linux asset).
+    """
+    upstream = meta["upstream"]
+    if not upstream.get("prerelease"):
+        return latest_release(upstream["owner"], upstream["repo"], token)
+
+    url = (
+        f"{GITHUB_API}/repos/{upstream['owner']}/{upstream['repo']}"
+        "/releases?per_page=100"
+    )
+    releases = api_get(url, token)
+    if not isinstance(releases, list) or not releases:
+        raise UpdateError("no releases returned (prerelease mode)")
+
+    asset_specs = list((meta.get("assets") or {}).values())
+    for release in releases:
+        if not release.get("assets"):
+            continue
+        pkgver = compute_pkgver(meta, release["tag_name"])
+        names = {a["name"] for a in release["assets"]}
+        if all(spec["name"].replace("{pkgver}", pkgver) in names
+               for spec in asset_specs):
+            return release
+    raise UpdateError("no release contains all configured assets (prerelease mode)")
+
+
 # --------------------------------------------------------------------------- #
 # Checksum helpers
 # --------------------------------------------------------------------------- #
@@ -118,6 +150,25 @@ def tag_to_pkgver(tag: str, strip_prefix: str | None) -> str:
     if strip_prefix and tag.startswith(strip_prefix):
         return tag[len(strip_prefix):]
     return tag
+
+
+def compute_pkgver(meta: dict, tag: str) -> str:
+    """Strip the configured prefix, then sanitize into a valid pkgver.
+
+    AUR pkgver strings must not contain hyphens. The optional `tag.sanitize`
+    pair `[pattern, replacement]` (regex, repl) also collapses prerelease
+    suffixes like `-beta.3` / `-alpha.5` to `beta3` / `alpha5`, which vercmp
+    sorts older than the final release (`1.0alpha < 1.0beta < ... < 1.0rc < 1.0`),
+    so a prerelease-tracked package upgrades cleanly once stable ships.
+    """
+    tag_cfg = meta.get("tag") or {}
+    ver = tag_to_pkgver(tag, tag_cfg.get("strip_prefix"))
+    sanitize = tag_cfg.get("sanitize")
+    if sanitize:
+        if not (isinstance(sanitize, list) and len(sanitize) == 2):
+            raise UpdateError("tag.sanitize must be [pattern, replacement]")
+        ver = re.sub(sanitize[0], sanitize[1], ver)
+    return ver
 
 
 def vercmp(a: str, b: str) -> int:
@@ -262,7 +313,7 @@ def srcinfo_python_fallback(pkgbuild_text: str) -> str:
             return [
                 re.sub(r"\$\{pkgver\}", pkgver, v)
                 if isinstance(v, str) else v
-                for v in vals
+                for v in (vals or [])
             ]
         src_fields = expand(src_fields)
         src_arm = expand(src_arm)
@@ -325,13 +376,11 @@ def _bash_arr(name: str, text: str, fallback_name: str | None = None) -> list[st
 def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) -> None:
     meta = load_manifest(pkg_dir)
     template = read_template(pkg_dir)
-    upstream = meta["upstream"]
-    release = latest_release(upstream["owner"], upstream["repo"], token)
+    release = resolve_release(meta, token)
 
     if tag is None:
         tag = release["tag_name"]
-    strip_prefix = (meta.get("tag") or {}).get("strip_prefix")
-    pkgver = tag_to_pkgver(tag, strip_prefix)
+    pkgver = compute_pkgver(meta, tag)
 
     # Verify the requested tag actually exists if we fetched latest instead.
     assets_by_name = {a["name"]: a for a in release.get("assets", [])}
@@ -340,6 +389,7 @@ def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) 
         "pkgver": pkgver,
         "pkgrel": "1",
         "maintainer": meta.get("maintainer", "You <you@example.com>"),
+        "tag": tag,
     }
 
     sha_arch: dict[str, str] = {}
@@ -378,14 +428,12 @@ def do_update(
     """Update a single AUR package. Returns 0 if pushed, 1 if already current."""
     meta = load_manifest(pkg_dir)
     template = read_template(pkg_dir)
-    upstream = meta["upstream"]
     pkgbase = meta["pkgname"]
     maintainer = meta.get("maintainer", "You <you@example.com>")
 
-    release = latest_release(upstream["owner"], upstream["repo"], token)
+    release = resolve_release(meta, token)
     tag = release["tag_name"]
-    strip_prefix = (meta.get("tag") or {}).get("strip_prefix")
-    newver = tag_to_pkgver(tag, strip_prefix)
+    newver = compute_pkgver(meta, tag)
 
     # --- clone current AUR state ------------------------------------------ #
     repo_url = AUR_GIT.format(pkgbase=pkgbase)
@@ -423,6 +471,7 @@ def do_update(
         "pkgver": newver,
         "pkgrel": newrel,
         "maintainer": maintainer,
+        "tag": tag,
     }
     for arch, spec in (meta.get("assets") or {}).items():
         name = spec["name"].replace("{pkgver}", newver)

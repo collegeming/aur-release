@@ -1,0 +1,29 @@
+# aur-release package manifest for snishaper-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+
+pkgname = "snishaper-bin"
+
+# Maintainer identity used in the PKGBUILD header and as git commit author.
+maintainer = "colegeming <collegeming@outlook.com>"
+
+[upstream]
+owner = "SnishaperTeam"
+repo = "SniShaper"
+# The Linux GUI build only ships in the v1.29.0-beta.x prerelease series so
+# far; the latest stable (v1.28) carries Windows-only assets. Track
+# prereleases so the package works today and upgrades seamlessly once v1.29.0
+# stable lands -- vercmp sorts "1.29.0beta3" older than "1.29.0", so the stable
+# release will be detected as a genuine version bump.
+prerelease = true
+
+[tag]
+# v1.29.0-beta.3 -> 1.29.0-beta.3 (prefix stripped)
+strip_prefix = "v"
+# ...then sanitize the hyphen away: 1.29.0beta3.
+# Hyphens are forbidden in pkgver, and keeping the alpha/beta/rc suffix makes
+# the prerelease sort older than the final release (vercmp: 1.0beta < 1.0).
+sanitize = ["-(alpha|beta|rc)\\.", "\\1"]
+
+[assets.x86_64]
+# Version-independent asset name; no {pkgver} placeholder needed.
+name = "snishaper-linux-amd64.tar.gz"
