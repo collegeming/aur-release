@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from functools import cmp_to_key
 from pathlib import Path
 
 try:
@@ -86,36 +87,58 @@ def latest_release(owner: str, repo: str, token: str | None) -> dict:
     return api_get(url, token)
 
 
-def resolve_release(meta: dict, token: str | None) -> dict:
-    """Return the upstream release to package.
+def resolve_release(meta: dict, token: str | None) -> dict | None:
+    """Return the upstream release to package, or None if none is usable.
 
-    Default: GitHub's `releases/latest` (newest stable; prereleases excluded).
-    When `[upstream] prerelease = true`, list `/releases` and pick the newest
-    one whose configured assets are all present -- necessary when Linux builds
-    only ship in a prerelease series (the latest stable has no Linux asset).
+    Scans the full release list (drafts and prereleases skipped unless
+    configured) and picks the release with the *highest version* among those
+    that carry every configured asset. Relying on GitHub's `/releases/latest`
+    is not safe: it orders by `created_at` (not `published_at`), which ties
+    for releases the upstream automation pre-creates, and it happily returns
+    a release whose binaries were never uploaded. Returning None lets the
+    caller decide whether to wait (update mode) or fail loudly (render mode).
+
+    When `[upstream] prerelease = true`, prereleases are considered too --
+    necessary when Linux builds only ship in a prerelease series.
     """
     upstream = meta["upstream"]
-    if not upstream.get("prerelease"):
-        return latest_release(upstream["owner"], upstream["repo"], token)
-
+    include_prerelease = bool(upstream.get("prerelease"))
     url = (
         f"{GITHUB_API}/repos/{upstream['owner']}/{upstream['repo']}"
         "/releases?per_page=100"
     )
     releases = api_get(url, token)
     if not isinstance(releases, list) or not releases:
-        raise UpdateError("no releases returned (prerelease mode)")
+        raise UpdateError("no releases returned")
 
     asset_specs = list((meta.get("assets") or {}).values())
-    for release in releases:
+
+    def usable(release: dict) -> bool:
+        if release.get("draft"):
+            return False
+        if not include_prerelease and release.get("prerelease"):
+            return False
         if not release.get("assets"):
-            continue
+            return False
         pkgver = compute_pkgver(meta, release["tag_name"])
         names = {a["name"] for a in release["assets"]}
-        if all(spec["name"].replace("{pkgver}", pkgver) in names
-               for spec in asset_specs):
-            return release
-    raise UpdateError("no release contains all configured assets (prerelease mode)")
+        return all(
+            spec["name"].replace("{pkgver}", pkgver) in names
+            for spec in asset_specs
+        )
+
+    candidates = [r for r in releases if usable(r)]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=cmp_to_key(
+            lambda a, b: vercmp(
+                compute_pkgver(meta, a["tag_name"]),
+                compute_pkgver(meta, b["tag_name"]),
+            )
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -377,6 +400,11 @@ def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) 
     meta = load_manifest(pkg_dir)
     template = read_template(pkg_dir)
     release = resolve_release(meta, token)
+    if release is None:
+        raise UpdateError(
+            "no release with all configured assets (upstream may have "
+            "published a tag without binaries yet)"
+        )
 
     if tag is None:
         tag = release["tag_name"]
@@ -439,6 +467,12 @@ def do_update(
     maintainer = meta.get("maintainer", "You <you@example.com>")
 
     release = resolve_release(meta, token)
+    if release is None:
+        print(
+            f"{pkgbase}: no upstream release has all configured assets "
+            "(upstream published a tag without binaries?); waiting"
+        )
+        return 2
     tag = release["tag_name"]
     newver = compute_pkgver(meta, tag)
 
