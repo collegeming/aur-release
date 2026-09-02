@@ -88,7 +88,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -uo pipefail
+          # The runner invokes the script as `sh -e`; errexit would abort on
+          # the updater's non-zero exit before the case below can translate
+          # it, so turn it off first.
+          set +e
           python tools/update_package.py update "packages/${{ matrix.package }}"
           code=$?
           # 0 -> a new version was pushed (green)
