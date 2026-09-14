@@ -111,6 +111,10 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
     if not isinstance(releases, list) or not releases:
         raise UpdateError("no releases returned")
 
+    # DEBUG: temporary diagnostic for release resolution
+    print(f"DEBUG: fetched {len(releases)} releases; first 5 tags: "
+          f"{[r['tag_name'] for r in releases[:5]]}", flush=True)
+
     asset_specs = list((meta.get("assets") or {}).values())
 
     def usable(release: dict) -> bool:
@@ -122,10 +126,15 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
             return False
         pkgver = compute_pkgver(meta, release["tag_name"])
         names = {a["name"] for a in release["assets"]}
-        return all(
+        ok = all(
             spec["name"].replace("{pkgver}", pkgver) in names
             for spec in asset_specs
         )
+        if release["tag_name"] in ("v3.8.3", "v3.8.2", "v3.8.1"):
+            print(f"DEBUG: {release['tag_name']} usable={ok} "
+                  f"pkgver={pkgver} nassets={len(names)} "
+                  f"names={sorted(names)[:3]}", flush=True)
+        return ok
 
     candidates = [r for r in releases if usable(r)]
     if not candidates:
