@@ -111,10 +111,6 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
     if not isinstance(releases, list) or not releases:
         raise UpdateError("no releases returned")
 
-    # DEBUG: temporary diagnostic for release resolution
-    print(f"DEBUG: fetched {len(releases)} releases; first 5 tags: "
-          f"{[r['tag_name'] for r in releases[:5]]}", flush=True)
-
     asset_specs = list((meta.get("assets") or {}).values())
 
     def usable(release: dict) -> bool:
@@ -126,15 +122,10 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
             return False
         pkgver = compute_pkgver(meta, release["tag_name"])
         names = {a["name"] for a in release["assets"]}
-        ok = all(
+        return all(
             spec["name"].replace("{pkgver}", pkgver) in names
             for spec in asset_specs
         )
-        if release["tag_name"] in ("v3.8.3", "v3.8.2", "v3.8.1"):
-            print(f"DEBUG: {release['tag_name']} usable={ok} "
-                  f"pkgver={pkgver} nassets={len(names)} "
-                  f"names={sorted(names)[:3]}", flush=True)
-        return ok
 
     candidates = [r for r in releases if usable(r)]
     if not candidates:
@@ -204,7 +195,7 @@ def compute_pkgver(meta: dict, tag: str) -> str:
 
 
 def vercmp(a: str, b: str) -> int:
-    """Return -1/0/1 as `new(a)` is older/equal/newer than `old(b)`.
+    """Return -1/0/1 as `a` is older/equal/newer than `b`.
 
     Uses pacman's vercmp when available (CI container), otherwise a pragmatic
     numeric comparison for bootstrap/review on non-Arch hosts.
@@ -212,15 +203,17 @@ def vercmp(a: str, b: str) -> int:
     if shutil.which("vercmp"):
         proc = subprocess.run(
             ["vercmp", a, b],
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
             check=False,
         )
-        # vercmp exits 0 if equal, 1 if a > b, 2 if a < b
-        if proc.returncode == 1:
-            return 1
-        if proc.returncode == 2:
-            return -1
-        return 0
+        # pacman's vercmp prints 0 (equal), 1 (a > b), or -1 (a < b) to stdout
+        # and always exits 0 -- do NOT check the exit code.
+        try:
+            return int(proc.stdout.strip())
+        except (ValueError, TypeError):
+            raise UpdateError(f"vercmp output not parseable: {proc.stdout!r}")
 
     def key(v: str):
         parts = re.split(r"([0-9]+)", v)
