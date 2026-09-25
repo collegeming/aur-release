@@ -5,8 +5,11 @@
 
 目前接入的包：
 
-- [`siyuan-unlock-bin`](packages/siyuan-unlock-bin/) — 源 [appdev/siyuan-unlock](https://github.com/appdev/siyuan-unlock)，跟踪 `releases/latest`（稳定版）。
+- [`siyuan-unlock-bin`](packages/siyuan-unlock-bin/) — 源 [appdev/siyuan-unlock](https://github.com/appdev/siyuan-unlock)，跟踪稳定版，`x86_64` + `aarch64`。
 - [`snishaper-bin`](packages/snishaper-bin/) — 源 [SnishaperTeam/SniShaper](https://github.com/SnishaperTeam/SniShaper)，跟踪预发布（Linux 构建目前只在 beta 系列里）。
+- [`kimi-code-bin`](packages/kimi-code-bin/) — 源 [MoonshotAI/kimi-code](https://github.com/MoonshotAI/kimi-code)，跟踪稳定版，`x86_64` + `aarch64`。
+  AUR 上已有一个 `kimi-code`，走 npm 方式安装、运行时要 nodejs；这里做的是官方「独立二进制」
+  的 `-bin` 包，不依赖 Node.js。
 
 ## 工作原理
 
@@ -22,11 +25,12 @@ tools/known_hosts                   # aur.archlinux.org 的 SSH host key（防�
 
 workflow 每 6 小时跑一次：对 `packages/` 下每个目录
 
-1. 调 GitHub API 取上游 release（默认 `releases/latest`；`prerelease = true` 时列
-   `/releases` 取第一个含全部所需资产的），得到 tag 与各资产文件的 sha256
-   （GitHub 对每个资产直接返回 `digest`，**无需下载 200MB+ 的二进制**去算校验和）；
+1. 调 GitHub API 取上游 release **列表**，挑出「资产齐全 + tag 能解析成合法 pkgver」
+   里版本最高的那个（`prerelease = true` 时连预发布一起纳入候选），得到 tag 与各资产
+   文件的 sha256（GitHub 对每个资产直接返回 `digest`，**无需下载 200MB+ 的二进制**
+   去算校验和）；
 2. 去掉 tag 前缀、按可选规则 `sanitize` 成合法 `pkgver`（不含连字符），与 AUR 当前
-   版本用 `vercmp` 比较；
+   版本用 `vercmp` 比较；解析不了的 tag 会被跳过并在日志里列出（见下）；
 3. 若上游更新：用模板渲染出新 PKGBUILD，用 `makepkg --printsrcinfo` 生成 `.SRCINFO`；
 4. `git clone` AUR 仓库 → 提交 → push（AUR 禁止 force-push，只会线性追加）。
 
@@ -89,12 +93,20 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 - Actions 标签页 → **Update** workflow → **Run workflow**。
 - 在 `package` 输入框填 `siyuan-unlock-bin` 可只跑该包；留空跑全部。
 
-## 新增第二个包
+## 新增一个包
 
 1. `packages/<pkg>/` 下新建 `metadata.toml` + `PKGBUILD.template`（照抄现成样例改）；
 2. 确保 `AUR_SSH_PRIVATE_KEY` 等 Secret 已配（公钥登记到 AUR 账号即可——首次 push
    到不存在的包名会自动建仓库，**无需网页提交**，见上文「首次接入一个新包」）；
 3. 完事，下次 workflow 自动接管。想立刻验证可手动触发一次。
+
+包名按 AUR 惯例取，别随手上后缀：
+
+| 后缀 | AUR 约定含义 | 本项目适用性 |
+|---|---|---|
+| `-bin` | 装上游**预编译产物**（release 里的二进制/压缩包） | ✅ 本项目的默认形态 |
+| `-git` / `-svn` / `-hg` | 从 VCS **最新提交**构建，版本形如 `r1234.abcdef-1` | ❌ 本项目跟的是 release，不是 HEAD |
+| 无后缀 | 从源码构建正式版 | 一般留给别人维护的源码包，同名已被占用时只能用 `-bin` |
 
 ### `metadata.toml` 选项
 
@@ -102,14 +114,15 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 |---|---|
 | `pkgname` / `maintainer` | 包名与 PKGBUILD 头部维护者署名 |
 | `[upstream] owner` / `repo` | GitHub 上游仓库 |
-| `[upstream] prerelease` | `true` 时改用 `/releases` 列表，挑第一个含全部所需资产的新 release（含预发布）。用于「Linux 构建只在 beta 里」这类上游 |
-| `[tag] strip_prefix` | 去掉 tag 前缀，`v3.8.1 → 3.8.1` |
+| `[upstream] prerelease` | `true` 时把预发布也纳入候选。用于「Linux 构建只在 beta 里」这类上游 |
+| `[tag] strip_prefix` | 去掉 tag 前缀，`v3.8.1 → 3.8.1`。前缀对不上说明上游改了 tag 格式，该 release 会被跳过并在日志里打印 `warning: ignoring release(s) with unusable tags`，不会拿错版本去推 |
 | `[tag] sanitize` | `[正则, 替换]` 二元组，把 tag 进一步规整成合法 pkgver。`-` 在 pkgver 里非法，用它把 `1.29.0-beta.3` 收成 `1.29.0beta3`；按 vercmp 规则 `1.0beta < 1.0`，预发布天然排早于正式版，后续升正式版会被正确识别为新版本 |
 | `[assets.<arch>] name` | 各架构对应的 release 资产名模板，`{pkgver}` 会被替换 |
 
-模板占位符：`{{pkgver}}` `{{pkgrel}}` `{{maintainer}}` `{{tag}}`（去掉前缀前的原始 tag，
-用于 release 下载 URL，当 pkgver 经 `sanitize` 后与真实 tag 不同时用它）以及各架构
-的 `{{sha256_<arch>}}`。
+模板占位符：`{{pkgver}}` `{{pkgrel}}` `{{maintainer}}` `{{tag}}`（去掉前缀前的原始 tag）、
+`{{tag_url}}`（同 `{{tag}}`，但做了 URL 转义 —— kimi-code 的 tag 形如
+`@moonshot-ai/kimi-code@2.1.1`，裸 `@` 在 URL 里含义有歧义，转义成 `%40` 后与 GitHub
+自己 `browser_download_url` 给出的形式一致），以及各架构的 `{{sha256_<arch>}}`。
 
 ## 本地验证（不碰 AUR）
 

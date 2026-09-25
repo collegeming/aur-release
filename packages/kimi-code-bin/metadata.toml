@@ -1,0 +1,26 @@
+# aur-release package manifest for kimi-code-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+
+pkgname = "kimi-code-bin"
+
+# Maintainer identity used in the PKGBUILD header and as git commit author.
+maintainer = "colegeming <collegeming@outlook.com>"
+
+[upstream]
+owner = "MoonshotAI"
+repo = "kimi-code"
+
+[tag]
+# Tags are npm-style and carry the scoped package name:
+#   @moonshot-ai/kimi-code@2.1.1 -> 2.1.1
+# pkgver must be the bare version, but the download URL needs the whole tag,
+# so the template builds it from {{tag_url}} instead of ${pkgver}.
+strip_prefix = "@moonshot-ai/kimi-code@"
+
+# Every stable release publishes a self-contained binary for both Linux
+# arches, so no prerelease tracking is needed.
+[assets.x86_64]
+name = "kimi-code-linux-x64.tar.gz"
+
+[assets.aarch64]
+name = "kimi-code-linux-arm64.tar.gz"

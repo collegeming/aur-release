@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import urllib.request
 from functools import cmp_to_key
 from pathlib import Path
@@ -100,6 +101,11 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
 
     When `[upstream] prerelease = true`, prereleases are considered too --
     necessary when Linux builds only ship in a prerelease series.
+
+    Releases whose tag the manifest cannot turn into a valid pkgver are not
+    candidates (upstreams keep stale odd tags around, e.g. SniShaper's
+    `v1.2.4-stable`); they are logged, and only become an error if they leave
+    nothing publishable at all.
     """
     upstream = meta["upstream"]
     include_prerelease = bool(upstream.get("prerelease"))
@@ -112,6 +118,7 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
         raise UpdateError("no releases returned")
 
     asset_specs = list((meta.get("assets") or {}).values())
+    rejected: list[str] = []
 
     def usable(release: dict) -> bool:
         if release.get("draft"):
@@ -120,7 +127,11 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
             return False
         if not release.get("assets"):
             return False
-        pkgver = compute_pkgver(meta, release["tag_name"])
+        try:
+            pkgver = compute_pkgver(meta, release["tag_name"])
+        except UpdateError:
+            rejected.append(release["tag_name"])
+            return False
         names = {a["name"] for a in release["assets"]}
         return all(
             spec["name"].replace("{pkgver}", pkgver) in names
@@ -129,7 +140,21 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
 
     candidates = [r for r in releases if usable(r)]
     if not candidates:
+        if rejected:
+            raise UpdateError(
+                "no release has a usable pkgver; rejected tags: "
+                f"{', '.join(sorted(set(rejected))[:5])} "
+                "(check [tag] strip_prefix/sanitize)"
+            )
         return None
+    if rejected:
+        # Non-fatal, but must be visible: if upstream ever switches tag format,
+        # "ignoring releases" is the only line in the log that says so, and the
+        # package would otherwise appear to be up to date.
+        print(
+            "warning: ignoring release(s) with unusable tags: "
+            + ", ".join(sorted(set(rejected))[:5])
+        )
     return max(
         candidates,
         key=cmp_to_key(
@@ -175,6 +200,10 @@ def tag_to_pkgver(tag: str, strip_prefix: str | None) -> str:
     return tag
 
 
+# AUR pkgver allows alphanumerics, '.', '_' and '+'; no whitespace, '/', ':' or '-'.
+PKGVER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+]*$")
+
+
 def compute_pkgver(meta: dict, tag: str) -> str:
     """Strip the configured prefix, then sanitize into a valid pkgver.
 
@@ -183,15 +212,46 @@ def compute_pkgver(meta: dict, tag: str) -> str:
     suffixes like `-beta.3` / `-alpha.5` to `beta3` / `alpha5`, which vercmp
     sorts older than the final release (`1.0alpha < 1.0beta < ... < 1.0rc < 1.0`),
     so a prerelease-tracked package upgrades cleanly once stable ships.
+
+    The result is validated: a tag whose shape drifts (upstream switching from
+    `v1.2.3` to `1.2.3`, or to an npm-style `@scope/pkg@1.2.3`) would otherwise
+    be pushed to AUR as a nonsense pkgver, since nobody reviews the automated
+    commits. A stale non-version tag (`v1.2.4-stable`) is rejected too.
     """
     tag_cfg = meta.get("tag") or {}
-    ver = tag_to_pkgver(tag, tag_cfg.get("strip_prefix"))
+    prefix = tag_cfg.get("strip_prefix")
+    if prefix and not tag.startswith(prefix):
+        # Every tag of a tracked repo conforms to its configured prefix today,
+        # so a mismatch means upstream changed its tag format.
+        raise UpdateError(
+            f"tag {tag!r} does not start with the configured strip_prefix "
+            f"{prefix!r}; upstream tag format changed?"
+        )
+    ver = tag_to_pkgver(tag, prefix)
     sanitize = tag_cfg.get("sanitize")
     if sanitize:
         if not (isinstance(sanitize, list) and len(sanitize) == 2):
             raise UpdateError("tag.sanitize must be [pattern, replacement]")
         ver = re.sub(sanitize[0], sanitize[1], ver)
+    if not PKGVER_RE.match(ver):
+        raise UpdateError(
+            f"tag {tag!r} produced invalid pkgver {ver!r}; "
+            "check [tag] strip_prefix/sanitize"
+        )
     return ver
+
+
+def tag_to_url_path(tag: str) -> str:
+    """Percent-encode a tag for use as a path in a release download URL.
+
+    Tags may contain characters that are legal but ambiguous in a URL path:
+    MoonshotAI/kimi-code uses npm-style tags (`@moonshot-ai/kimi-code@2.1.1`),
+    where a bare `@` reads as curl's userinfo separator and a bare `/` would
+    split the tag across path segments. GitHub advertises exactly this encoded
+    form in each asset's `browser_download_url`, so mirror it -- `/` stays a
+    path separator, everything else that needs it is escaped.
+    """
+    return urllib.parse.quote(tag, safe="/")
 
 
 def vercmp(a: str, b: str) -> int:
@@ -420,6 +480,7 @@ def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) 
         "pkgrel": "1",
         "maintainer": meta.get("maintainer", "You <you@example.com>"),
         "tag": tag,
+        "tag_url": tag_to_url_path(tag),
     }
 
     sha_arch: dict[str, str] = {}
@@ -515,6 +576,7 @@ def do_update(
         "pkgrel": newrel,
         "maintainer": maintainer,
         "tag": tag,
+        "tag_url": tag_to_url_path(tag),
     }
     for arch, spec in (meta.get("assets") or {}).items():
         name = spec["name"].replace("{pkgver}", newver)
