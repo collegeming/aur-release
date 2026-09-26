@@ -19,17 +19,22 @@ conflicts=('kimi-code' 'kimi-cli')
 options=('!strip')
 # The LICENSE is not part of any release asset, so it is pinned here from the
 # default branch; refresh its sha256 only if upstream changes that file.
+# Source local names are version-tagged (filename::url syntax) because the
+# upstream asset names are version-independent ("kimi-code-linux-x64.tar.gz"
+# for every release). Without the rename, makepkg/yay reuse the previous
+# version's cached download under the same filename and the sha256 check
+# fails on every upgrade.
 source_x86_64=(
-    "https://github.com/MoonshotAI/kimi-code/releases/download/{{tag_url}}/kimi-code-linux-x64.tar.gz"
-    'LICENSE::https://raw.githubusercontent.com/MoonshotAI/kimi-code/main/LICENSE'
+    "kimi-code-${pkgver}-linux-x64.tar.gz::https://github.com/MoonshotAI/kimi-code/releases/download/{{tag_url}}/kimi-code-linux-x64.tar.gz"
+    "kimi-code-${pkgver}-LICENSE::https://raw.githubusercontent.com/MoonshotAI/kimi-code/main/LICENSE"
 )
 sha256sums_x86_64=(
     '{{sha256_x86_64}}'
     '23cc68e17992e0b512ae2e80afc5787d7d8e0fbfbdb4fff54ec0245508fa400e'
 )
 source_aarch64=(
-    "https://github.com/MoonshotAI/kimi-code/releases/download/{{tag_url}}/kimi-code-linux-arm64.tar.gz"
-    'LICENSE::https://raw.githubusercontent.com/MoonshotAI/kimi-code/main/LICENSE'
+    "kimi-code-${pkgver}-linux-arm64.tar.gz::https://github.com/MoonshotAI/kimi-code/releases/download/{{tag_url}}/kimi-code-linux-arm64.tar.gz"
+    "kimi-code-${pkgver}-LICENSE::https://raw.githubusercontent.com/MoonshotAI/kimi-code/main/LICENSE"
 )
 sha256sums_aarch64=(
     '{{sha256_aarch64}}'
@@ -39,6 +44,6 @@ sha256sums_aarch64=(
 package() {
     # Each tarball holds a single self-contained `kimi` executable.
     install -Dm755 "${srcdir}/kimi" "${pkgdir}/usr/bin/kimi"
-    install -Dm644 "${srcdir}/LICENSE" \
+    install -Dm644 "${srcdir}/kimi-code-${pkgver}-LICENSE" \
         "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }
