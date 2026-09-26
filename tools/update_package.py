@@ -297,6 +297,11 @@ def read_pkgver_from_pkgbuild(text: str) -> tuple[str, str] | None:
     return pkgver.group(1), (pkgrel.group(1) if pkgrel else "1")
 
 
+def _normalize_pkgrel(text: str) -> str:
+    """Blank out the pkgrel line so PKGBUILD comparisons ignore the bump."""
+    return re.sub(r"(?m)^\s*pkgrel\s*=.*$", "pkgrel=<N>", text)
+
+
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
@@ -518,11 +523,16 @@ def do_update(
 ) -> int:
     """Update a single AUR package.
 
-    Returns 0 if a new version was pushed, or 2 if the package is already
-    current / upstream is older (an idempotent, non-error skip). A genuine
-    failure raises UpdateError, which main() reports as exit 1 -- kept
-    distinct from 2 so the CI workflow can tell "nothing to do" (green) apart
-    from a real error (red).
+    Returns 0 if a commit was pushed, or 2 if there was nothing to do (the
+    package is already current AND its PKGBUILD matches the template, or
+    upstream is older) -- an idempotent, non-error skip. A genuine failure
+    raises UpdateError, which main() reports as exit 1 -- kept distinct from
+    2 so the CI workflow can tell "nothing to do" (green) apart from a real
+    error (red).
+
+    Besides version bumps, a same-version republish (pkgrel + 1) happens
+    when the rendered PKGBUILD differs from the published one: template
+    fixes, or upstream swapping an asset under the same tag.
     """
     meta = load_manifest(pkg_dir)
     template = read_template(pkg_dir)
@@ -551,13 +561,13 @@ def do_update(
         published = read_pkgver_from_pkgbuild(current_pkgbuild.read_text(encoding="utf-8"))
 
     # --- decide whether a new version must be built ----------------------- #
+    aur_pkgbuild_text: str | None = None
+    version_changed = True
+    oldrel = "0"
     if published is not None:
         oldver, oldrel = published
+        aur_pkgbuild_text = current_pkgbuild.read_text(encoding="utf-8")
         cmp = vercmp(newver, oldver)
-        if cmp == 0:
-            print(f"{pkgbase}: already at {oldver}-{oldrel}; nothing to do")
-            shutil.rmtree(workdir, ignore_errors=True)
-            return 2
         if cmp < 0:
             print(
                 f"{pkgbase}: upstream {newver} is older than published "
@@ -565,15 +575,12 @@ def do_update(
             )
             shutil.rmtree(workdir, ignore_errors=True)
             return 2
-        newrel = "1"
-    else:
-        newrel = "1"
+        version_changed = cmp > 0
 
-    # --- render fresh PKGBUILD + .SRCINFO --------------------------------- #
+    # --- resolve assets and render ---------------------------------------- #
     assets_by_name = {a["name"]: a for a in release.get("assets", [])}
     context = {
         "pkgver": newver,
-        "pkgrel": newrel,
         "maintainer": maintainer,
         "tag": tag,
         "tag_url": tag_to_url_path(tag),
@@ -587,6 +594,25 @@ def do_update(
         checksum = digest or sha256_of_url(asset["browser_download_url"], token)
         context[f"sha256_{arch}"] = checksum
 
+    if version_changed:
+        newrel = "1"
+    else:
+        # Same version: republish only when the rendered PKGBUILD actually
+        # differs from the published one (template fixes, or upstream
+        # replacing an asset under the same tag). pkgrel is normalized away
+        # so the bump itself never counts as a change.
+        probe = render_pkgbuild(template, {**context, "pkgrel": oldrel})
+        if _normalize_pkgrel(probe) == _normalize_pkgrel(aur_pkgbuild_text or ""):
+            print(f"{pkgbase}: already at {oldver}-{oldrel}; nothing to do")
+            shutil.rmtree(workdir, ignore_errors=True)
+            return 2
+        newrel = str(int(oldrel) + 1)
+        print(
+            f"{pkgbase}: {oldver} needs republish (PKGBUILD changed: "
+            f"template fix or upstream asset swap) -> pkgrel {newrel}"
+        )
+
+    context["pkgrel"] = newrel
     pkgbuild_text = render_pkgbuild(template, context)
     (workdir / "PKGBUILD").write_text(pkgbuild_text, encoding="utf-8")
     # The workdir is owned by root (mkdtemp); makepkg runs as an unprivileged
