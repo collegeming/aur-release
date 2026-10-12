@@ -24,3 +24,9 @@ name = "kimi-code-linux-x64.tar.gz"
 
 [assets.aarch64]
 name = "kimi-code-linux-arm64.tar.gz"
+
+# LICENSE lives in the repo, not in a release asset. Pin it to the release TAG
+# (immutable) rather than `main`, and let the updater re-hash it each run, so a
+# moving branch can never invalidate the checksum.
+[extras.license]
+url = "https://raw.githubusercontent.com/MoonshotAI/kimi-code/{{tag_ref}}/LICENSE"

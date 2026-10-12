@@ -25,5 +25,16 @@ strip_prefix = "v"
 sanitize = ["-(alpha|beta|rc)\\.", "\\1"]
 
 [assets.x86_64]
-# Version-independent asset name; no {pkgver} placeholder needed.
-name = "snishaper-linux-amd64.tar.gz"
+# Upstream renamed the Linux asset in v1.29.1 (amd64 -> x64). List both so old
+# and new releases both resolve; the updater picks whichever exists.
+names = ["snishaper-linux-x64.tar.gz", "snishaper-linux-amd64.tar.gz"]
+
+# Files that live in the repo rather than in a release asset. Pin them to the
+# release TAG (immutable) instead of `main`: a moving branch changes content
+# under a fixed checksum and breaks every build. The updater downloads and
+# hashes them on each run, so the checksums are never stale.
+[extras.icon]
+url = "https://raw.githubusercontent.com/SnishaperTeam/SniShaper/{{tag}}/Assets/AppList.targetsize-256_altform-unplated.png"
+
+[extras.license]
+url = "https://raw.githubusercontent.com/SnishaperTeam/SniShaper/{{tag}}/LICENSE"

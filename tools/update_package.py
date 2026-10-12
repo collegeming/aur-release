@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 from functools import cmp_to_key
@@ -120,6 +121,17 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
     asset_specs = list((meta.get("assets") or {}).values())
     rejected: list[str] = []
 
+    def asset_names(arch_spec: dict, pkgver: str) -> list[str]:
+        """All acceptable asset names for one arch, newest-first order kept."""
+        raw = arch_spec.get("names") or [arch_spec["name"]]
+        return [n.replace("{pkgver}", pkgver) for n in raw]
+
+    def match_asset(arch_spec: dict, pkgver: str, available: set[str]) -> str | None:
+        for candidate in asset_names(arch_spec, pkgver):
+            if candidate in available:
+                return candidate
+        return None
+
     def usable(release: dict) -> bool:
         if release.get("draft"):
             return False
@@ -134,7 +146,7 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
             return False
         names = {a["name"] for a in release["assets"]}
         return all(
-            spec["name"].replace("{pkgver}", pkgver) in names
+            match_asset(spec, pkgver, names) is not None
             for spec in asset_specs
         )
 
@@ -169,18 +181,26 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
 # --------------------------------------------------------------------------- #
 # Checksum helpers
 # --------------------------------------------------------------------------- #
-def sha256_of_url(url: str, token: str | None) -> str:
+def sha256_of_url(url: str, token: str | None, attempts: int = 4) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-    digest = hashlib.sha256()
-    with urllib.request.urlopen(req, timeout=600) as resp:
-        while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            digest = hashlib.sha256()
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except Exception as exc:  # noqa: BLE001 - retried below
+            last = exc
+            if attempt < attempts - 1:
+                time.sleep(2 * (attempt + 1))
+    raise UpdateError(f"download failed after {attempts} attempts: {url}: {last}")
 
 
 def asset_digest(asset: dict) -> str | None:
@@ -252,6 +272,44 @@ def tag_to_url_path(tag: str) -> str:
     path separator, everything else that needs it is escaped.
     """
     return urllib.parse.quote(tag, safe="/")
+
+
+def tag_to_ref_path(tag: str) -> str:
+    """Fully percent-encode a tag for use as a raw.githubusercontent ref.
+
+    Unlike a release download URL, the ref there is a single path segment, so
+    `/` must be escaped too (`@moonshot-ai%2Fkimi-code%402.1.1`), otherwise the
+    server would read only the part before the slash as the ref.
+    """
+    return urllib.parse.quote(tag, safe="")
+
+
+def extra_sources_context(meta: dict, tag: str, pkgver: str,
+                          token: str | None) -> dict[str, str]:
+    """Download each configured `[extras.<key>]` file and hash it.
+
+    Templates reference them as `{{url_extra_<key>}}` / `{{sha256_extra_<key>}}`.
+    Hashing here (rather than pinning a literal in the template) means an
+    upstream edit to the file is picked up automatically instead of breaking
+    the build with a stale checksum.
+    """
+    extras = meta.get("extras") or {}
+    out: dict[str, str] = {}
+    for key, spec in extras.items():
+        url = spec["url"]
+        for placeholder, value in (
+            ("{{tag}}", tag),
+            ("{{tag_url}}", tag_to_url_path(tag)),
+            ("{{tag_ref}}", tag_to_ref_path(tag)),
+            ("{pkgver}", pkgver),
+        ):
+            url = url.replace(placeholder, value)
+        out[f"url_extra_{key}"] = url
+        try:
+            out[f"sha256_extra_{key}"] = sha256_of_url(url, token)
+        except Exception as exc:  # noqa: BLE001 - surface a clear message
+            raise UpdateError(f"extra source '{key}' ({url}) failed: {exc}")
+    return out
 
 
 def vercmp(a: str, b: str) -> int:
@@ -460,6 +518,48 @@ def _bash_arr(name: str, text: str, fallback_name: str | None = None) -> list[st
     ]
 
 
+def asset_candidates(arch_spec: dict, pkgver: str) -> list[str]:
+    """Acceptable asset names for one arch, preference order preserved.
+
+    `names` (a list) allows aliases for upstreams that renamed an asset without
+    changing its role -- e.g. SniShaper's `snishaper-linux-amd64.tar.gz`
+    became `snishaper-linux-x64.tar.gz` in v1.29.1. Plain `name` is the
+    single-name form.
+    """
+    raw = arch_spec.get("names") or [arch_spec["name"]]
+    return [n.replace("{pkgver}", pkgver) for n in raw]
+
+
+def resolve_assets(meta: dict, release: dict, pkgver: str,
+                   token: str | None) -> dict[str, str]:
+    """Match each configured arch to a release asset and hash it.
+
+    Returns template context entries: `asset_<arch>` (the asset's real
+    filename, so templates stop hardcoding it) and `sha256_<arch>`. The
+    checksum comes from GitHub's precomputed digest when present, so no
+    multi-hundred-MB download is needed.
+    """
+    by_name = {a["name"]: a for a in release.get("assets", [])}
+    out: dict[str, str] = {}
+    for arch, spec in (meta.get("assets") or {}).items():
+        matched = next(
+            (n for n in asset_candidates(spec, pkgver) if n in by_name), None
+        )
+        if matched is None:
+            tried = ", ".join(asset_candidates(spec, pkgver))
+            raise UpdateError(
+                f"release {release['tag_name']} has no asset for {arch} "
+                f"(tried: {tried})"
+            )
+        asset = by_name[matched]
+        out[f"asset_{arch}"] = matched
+        out[f"sha256_{arch}"] = (
+            asset_digest(asset)
+            or sha256_of_url(asset["browser_download_url"], token)
+        )
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Actions
 # --------------------------------------------------------------------------- #
@@ -477,9 +577,6 @@ def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) 
         tag = release["tag_name"]
     pkgver = compute_pkgver(meta, tag)
 
-    # Verify the requested tag actually exists if we fetched latest instead.
-    assets_by_name = {a["name"]: a for a in release.get("assets", [])}
-
     context = {
         "pkgver": pkgver,
         "pkgrel": "1",
@@ -487,19 +584,8 @@ def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) 
         "tag": tag,
         "tag_url": tag_to_url_path(tag),
     }
-
-    sha_arch: dict[str, str] = {}
-    for arch, spec in (meta.get("assets") or {}).items():
-        name = spec["name"].replace("{pkgver}", pkgver)
-        asset = assets_by_name.get(name)
-        if asset is None:
-            raise UpdateError(f"release asset '{name}' not found for arch {arch}")
-        digest = asset_digest(asset)
-        checksum = digest or sha256_of_url(asset["browser_download_url"], token)
-        sha_arch[arch] = checksum
-
-    context["sha256_x86_64"] = sha_arch.get("x86_64", "")
-    context["sha256_aarch64"] = sha_arch.get("aarch64", "")
+    context.update(resolve_assets(meta, release, pkgver, token))
+    context.update(extra_sources_context(meta, tag, pkgver, token))
 
     pkgbuild = render_pkgbuild(template, context)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -578,21 +664,14 @@ def do_update(
         version_changed = cmp > 0
 
     # --- resolve assets and render ---------------------------------------- #
-    assets_by_name = {a["name"]: a for a in release.get("assets", [])}
     context = {
         "pkgver": newver,
         "maintainer": maintainer,
         "tag": tag,
         "tag_url": tag_to_url_path(tag),
     }
-    for arch, spec in (meta.get("assets") or {}).items():
-        name = spec["name"].replace("{pkgver}", newver)
-        asset = assets_by_name.get(name)
-        if asset is None:
-            raise UpdateError(f"release asset '{name}' not found for arch {arch}")
-        digest = asset_digest(asset)
-        checksum = digest or sha256_of_url(asset["browser_download_url"], token)
-        context[f"sha256_{arch}"] = checksum
+    context.update(resolve_assets(meta, release, newver, token))
+    context.update(extra_sources_context(meta, tag, newver, token))
 
     if version_changed:
         newrel = "1"
