@@ -1,0 +1,30 @@
+# aur-release package manifest for kimi-code-desktop-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+
+pkgname = "kimi-code-desktop-bin"
+
+# Maintainer identity used in the PKGBUILD header and as git commit author.
+maintainer = "colegeming <collegeming@outlook.com>"
+
+[upstream]
+# Kimi Code Desktop is a *separate product* from the CLI (see
+# kimi-code-bin): its own version line (1.x vs the CLI's 2.x), and no GitHub
+# repository or release assets at all -- only vendor-hosted installers. The
+# sole machine-readable "a new version is out" signal is the feed its own
+# auto-updater reads, named in the app's resources/app-update.yml:
+#   provider: generic, url: https://code.kimi.com/kimi-code/desktop/
+kind = "electron-updater"
+feed = "https://code.kimi.com/kimi-code/desktop/latest-linux.yml"
+
+[checksum]
+# The feed carries a base64 sha512 per artifact (the app verifies its own
+# downloads against it) and its URLs are version-stamped, so checking for a new
+# version costs one ~700-byte request instead of fetching the 110 MB installer.
+algorithm = "sha512"
+
+# Linux desktop builds are x86_64 only; AppImage/deb/rpm all ship x86_64.
+[assets.x86_64]
+# Of the three formats the .deb is the friendliest to unpack: bsdtar reads the
+# ar container and the xz payload with no extra makedepends, and it carries the
+# vendor's dependency list.
+name = "KimiCode-{pkgver}-linux-amd64.deb"

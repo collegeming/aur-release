@@ -16,6 +16,7 @@ so it works on non-Arch hosts for bootstrap/review.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -66,7 +67,7 @@ def read_template(pkg_dir: Path) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# GitHub release lookup
+# Upstream lookup
 # --------------------------------------------------------------------------- #
 def api_get(url: str, token: str | None) -> dict:
     req = urllib.request.Request(
@@ -89,6 +90,113 @@ def latest_release(owner: str, repo: str, token: str | None) -> dict:
     return api_get(url, token)
 
 
+def http_get_text(url: str, token: str | None = None) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        raise UpdateError(f"HTTP {exc.code} for {url}") from exc
+    except urllib.error.URLError as exc:
+        raise UpdateError(f"network error for {url}: {exc.reason}") from exc
+
+
+# --------------------------------------------------------------------------- #
+# electron-builder update feeds (used by upstreams with no GitHub releases)
+# --------------------------------------------------------------------------- #
+def parse_update_feed(text: str) -> dict:
+    """Parse the parts of an electron-builder `latest-linux.yml` we need.
+
+    Hand-rolled on purpose: the file is machine-generated with a fixed, flat
+    shape, and a YAML dependency would be the only third-party import in this
+    script. Anything unexpected raises rather than yielding a bogus version.
+    """
+    version = _bash_val(r"^version:\s*'?\"?([^'\"\s]+)", text)
+    if not version:
+        raise UpdateError("update feed has no top-level `version`")
+    files: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    in_files = False
+    for line in text.splitlines():
+        if re.match(r"^files:\s*$", line):
+            in_files = True
+            continue
+        if not in_files:
+            continue
+        if re.match(r"^\S", line):
+            # Back at the top level (`path:`, `releaseDate:`, ...): list ended.
+            break
+        item = line.strip()
+        if item.startswith("- "):
+            current = {}
+            files.append(current)
+            item = item[2:]
+        if ":" in item:
+            key, _, value = item.partition(":")
+            if key.strip() in ("url", "sha256", "sha512", "size"):
+                current[key.strip()] = value.strip().strip("'\"")
+    if not files:
+        raise UpdateError("update feed lists no files")
+    return {"version": version, "files": files}
+
+
+def resolve_feed_release(meta: dict, token: str | None) -> dict:
+    """Turn an electron-builder feed into the release dict the rest expects.
+
+    Some upstreams publish no GitHub release at all: Kimi Code Desktop only
+    exists as vendor-hosted installers, and the sole machine-readable statement
+    of "a new version is out" is the feed its own auto-updater reads (named in
+    the app's `resources/app-update.yml`). The feed carries the version plus a
+    base64 checksum per artifact and version-stamped URLs, so one tiny request
+    replaces downloading a 110 MB installer just to see what version it is.
+    """
+    feed = meta["upstream"].get("feed")
+    if not feed:
+        raise UpdateError('kind = "electron-updater" needs an [upstream] feed')
+    data = parse_update_feed(http_get_text(feed, token))
+    version = data["version"]
+
+    assets: list[dict] = []
+    for entry in data["files"]:
+        rel = entry.get("url")
+        if not rel:
+            continue
+        digest = None
+        for algo in ("sha512", "sha256"):
+            if entry.get(algo):
+                # The feed stores the digest base64-encoded; PKGBUILDs want hex.
+                digest = f"{algo}:{base64.b64decode(entry[algo]).hex()}"
+                break
+        assets.append({
+            "name": rel.rsplit("/", 1)[-1],
+            "browser_download_url": urllib.parse.urljoin(feed, rel),
+            "digest": digest,
+        })
+
+    found = {a["name"] for a in assets}
+    unresolved = [
+        arch
+        for arch, spec in (meta.get("assets") or {}).items()
+        if not any(name in found for name in asset_candidates(spec, version))
+    ]
+    if unresolved:
+        # A feed always describes exactly one release, so a configured asset
+        # being absent means upstream renamed or dropped it -- a hard breakage,
+        # not "the release is not out yet".
+        raise UpdateError(
+            f"feed {feed} has no asset for {', '.join(unresolved)}; "
+            f"it lists {sorted(found)}"
+        )
+    return {
+        "tag_name": version,
+        "draft": False,
+        "prerelease": False,
+        "assets": assets,
+    }
+
+
 def resolve_release(meta: dict, token: str | None) -> dict | None:
     """Return the upstream release to package, or None if none is usable.
 
@@ -107,8 +215,17 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
     candidates (upstreams keep stale odd tags around, e.g. SniShaper's
     `v1.2.4-stable`); they are logged, and only become an error if they leave
     nothing publishable at all.
+
+    Which source is consulted depends on `[upstream] kind` (default
+    `github-releases`); `electron-updater` reads a vendor update feed instead,
+    for upstreams that never publish GitHub releases at all.
     """
     upstream = meta["upstream"]
+    kind = upstream.get("kind", "github-releases")
+    if kind == "electron-updater":
+        return resolve_feed_release(meta, token)
+    if kind != "github-releases":
+        raise UpdateError(f"unknown [upstream] kind {kind!r}")
     include_prerelease = bool(upstream.get("prerelease"))
     url = (
         f"{GITHUB_API}/repos/{upstream['owner']}/{upstream['repo']}"
@@ -181,14 +298,28 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
 # --------------------------------------------------------------------------- #
 # Checksum helpers
 # --------------------------------------------------------------------------- #
-def sha256_of_url(url: str, token: str | None, attempts: int = 4) -> str:
+def checksum_algorithm(meta: dict) -> str:
+    """Which checksum the PKGBUILD carries (`[checksum] algorithm`).
+
+    GitHub exposes a sha256 digest per asset; electron-builder feeds expose
+    sha512. Declaring it keeps the template's `{{sha512_x86_64}}` placeholder,
+    the `sha512sums_x86_64` array and the download fallback in step.
+    """
+    algo = (meta.get("checksum") or {}).get("algorithm", "sha256")
+    if algo not in ("sha256", "sha512"):
+        raise UpdateError(f"unsupported [checksum] algorithm {algo!r}")
+    return algo
+
+
+def digest_of_url(url: str, token: str | None, algo: str = "sha256",
+                  attempts: int = 4) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     last: Exception | None = None
     for attempt in range(attempts):
         try:
-            digest = hashlib.sha256()
+            digest = hashlib.new(algo)
             with urllib.request.urlopen(req, timeout=600) as resp:
                 while True:
                     chunk = resp.read(1024 * 1024)
@@ -203,12 +334,17 @@ def sha256_of_url(url: str, token: str | None, attempts: int = 4) -> str:
     raise UpdateError(f"download failed after {attempts} attempts: {url}: {last}")
 
 
-def asset_digest(asset: dict) -> str | None:
-    """Return the sha256 hex digest if GitHub has precomputed one."""
-    raw = asset.get("digest") or ""
-    if raw.startswith("sha256:"):
-        return raw[len("sha256:"):]
-    return None
+def asset_digest(asset: dict, algo: str = "sha256") -> str | None:
+    """Return the asset's hex digest if it carries one in `algo`.
+
+    Both GitHub and electron-builder tag the digest with its algorithm, so a
+    sha512-only source simply reports nothing here for a sha256 request and the
+    caller falls back to hashing the download.
+    """
+    prefix, _, value = (asset.get("digest") or "").partition(":")
+    if prefix != algo or not value:
+        return None
+    return value
 
 
 # --------------------------------------------------------------------------- #
@@ -306,7 +442,7 @@ def extra_sources_context(meta: dict, tag: str, pkgver: str,
             url = url.replace(placeholder, value)
         out[f"url_extra_{key}"] = url
         try:
-            out[f"sha256_extra_{key}"] = sha256_of_url(url, token)
+            out[f"sha256_extra_{key}"] = digest_of_url(url, token)
         except Exception as exc:  # noqa: BLE001 - surface a clear message
             raise UpdateError(f"extra source '{key}' ({url}) failed: {exc}")
     return out
@@ -430,11 +566,12 @@ def srcinfo_via_makepkg(pkgbuild_path: Path) -> str:
     return proc.stdout
 
 
-def srcinfo_python_fallback(pkgbuild_text: str) -> str:
+def srcinfo_python_fallback(pkgbuild_text: str, algo: str = "sha256") -> str:
     """Minimal .SRCINFO emitter for simple prebuilt-binary PKGBUILDs.
 
     Only used for local bootstrap/review; the CI pipeline always uses
-    `srcinfo_via_makepkg` for canonical output.
+    `srcinfo_via_makepkg` for canonical output. `algo` names the checksum
+    arrays to look for (`sha256sums` / `sha512sums`).
     """
     fields = {
         "pkgbase": _bash_val(r"^\s*pkgname\s*=\s*([^#\s]+)", pkgbuild_text),
@@ -443,18 +580,22 @@ def srcinfo_python_fallback(pkgbuild_text: str) -> str:
         "pkgrel": _bash_val(r"^\s*pkgrel\s*=\s*([^#\s]+)", pkgbuild_text),
         "url": _bash_val(r"^\s*url\s*='([^']*)'", pkgbuild_text),
     }
-    for key in ("arch", "license", "depends", "provides", "conflicts", "options"):
+    for key in ("arch", "license", "depends", "optdepends", "provides",
+                "conflicts", "noextract", "options"):
         values = _bash_arr(key, pkgbuild_text)
         if values is not None:
             fields[key] = values
 
+    sums_name = f"{algo}sums"
     src_fields = _bash_arr("source_x86_64", pkgbuild_text, fallback_name="source")
-    sums_x86 = _bash_arr("sha256sums_x86_64", pkgbuild_text, fallback_name="sha256sums")
+    sums_x86 = _bash_arr(f"{sums_name}_x86_64", pkgbuild_text,
+                         fallback_name=sums_name)
     src_arm = _bash_arr("source_aarch64", pkgbuild_text)
-    sums_arm = _bash_arr("sha256sums_aarch64", pkgbuild_text)
+    sums_arm = _bash_arr(f"{sums_name}_aarch64", pkgbuild_text)
 
-    # makepkg --printsrcinfo expands ${pkgver} in source/checksum lines; the
-    # pure-Python fallback must do the same so bootstrap output matches CI.
+    # makepkg --printsrcinfo expands ${pkgver} in source/checksum/noextract
+    # lines; the pure-Python fallback must do the same so bootstrap output
+    # matches CI.
     pkgver = fields.get("pkgver")
     if pkgver:
         def expand(vals):
@@ -465,13 +606,16 @@ def srcinfo_python_fallback(pkgbuild_text: str) -> str:
             ]
         src_fields = expand(src_fields)
         src_arm = expand(src_arm)
+        if fields.get("noextract"):
+            fields["noextract"] = expand(fields["noextract"])
         sums_x86 = [v for v in (sums_x86 or [])]
         sums_arm = [v for v in (sums_arm or [])]
 
     lines: list[str] = []
     ordered = [
         "pkgbase", "pkgdesc", "pkgver", "pkgrel", "url",
-        "arch", "license", "depends", "provides", "conflicts", "options",
+        "arch", "license", "depends", "optdepends", "provides", "conflicts",
+        "noextract", "options",
     ]
     pkgbase = fields.pop("pkgbase", None)
     if pkgbase:
@@ -486,9 +630,9 @@ def srcinfo_python_fallback(pkgbuild_text: str) -> str:
 
     for label, vals in (
         ("source_x86_64", src_fields),
-        ("sha256sums_x86_64", sums_x86),
+        (f"{sums_name}_x86_64", sums_x86),
         ("source_aarch64", src_arm),
-        ("sha256sums_aarch64", sums_arm),
+        (f"{sums_name}_aarch64", sums_arm),
     ):
         if vals:
             for v in vals:
@@ -511,10 +655,13 @@ def _bash_arr(name: str, text: str, fallback_name: str | None = None) -> list[st
         m = re.search(rf"^\s*{fallback_name}\s*=\s*\((.*?)\)", text, re.M | re.S)
     if not m:
         return None
+    # Split on whitespace *outside* quotes: an entry such as
+    # 'libappindicator-gtk3: tray icon' is one element, not three.
+    tokens = re.findall(r"'[^']*'|\"[^\"]*\"|\S+", m.group(1))
     return [
-        v.strip().strip("'\"")
-        for v in m.group(1).split()
-        if v.strip() and not v.strip().startswith("#")
+        t.strip().strip("'\"")
+        for t in tokens
+        if t.strip() and not t.strip().startswith("#")
     ]
 
 
@@ -535,10 +682,12 @@ def resolve_assets(meta: dict, release: dict, pkgver: str,
     """Match each configured arch to a release asset and hash it.
 
     Returns template context entries: `asset_<arch>` (the asset's real
-    filename, so templates stop hardcoding it) and `sha256_<arch>`. The
-    checksum comes from GitHub's precomputed digest when present, so no
-    multi-hundred-MB download is needed.
+    filename, so templates stop hardcoding it), `url_asset_<arch>` (its
+    download URL) and `<algo>_<arch>` (its checksum, with `<algo>` chosen by
+    `[checksum] algorithm`). The checksum comes from the source's precomputed
+    digest when present, so no multi-hundred-MB download is needed.
     """
+    algo = checksum_algorithm(meta)
     by_name = {a["name"]: a for a in release.get("assets", [])}
     out: dict[str, str] = {}
     for arch, spec in (meta.get("assets") or {}).items():
@@ -553,9 +702,10 @@ def resolve_assets(meta: dict, release: dict, pkgver: str,
             )
         asset = by_name[matched]
         out[f"asset_{arch}"] = matched
-        out[f"sha256_{arch}"] = (
-            asset_digest(asset)
-            or sha256_of_url(asset["browser_download_url"], token)
+        out[f"url_asset_{arch}"] = asset["browser_download_url"]
+        out[f"{algo}_{arch}"] = (
+            asset_digest(asset, algo)
+            or digest_of_url(asset["browser_download_url"], token, algo)
         )
     return out
 
@@ -595,7 +745,7 @@ def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) 
     if shutil.which("makepkg"):
         srcinfo = srcinfo_via_makepkg(pkgbuild_path)
     else:
-        srcinfo = srcinfo_python_fallback(pkgbuild)
+        srcinfo = srcinfo_python_fallback(pkgbuild, checksum_algorithm(meta))
     (out_dir / ".SRCINFO").write_text(srcinfo, encoding="utf-8")
 
     print(f"rendered {pkgver}-1 -> {out_dir}")

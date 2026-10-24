@@ -10,6 +10,15 @@
 - [`kimi-code-bin`](packages/kimi-code-bin/) — 源 [MoonshotAI/kimi-code](https://github.com/MoonshotAI/kimi-code)，跟踪稳定版，`x86_64` + `aarch64`。
   AUR 上已有一个 `kimi-code`，走 npm 方式安装、运行时要 nodejs；这里做的是官方「独立二进制」
   的 `-bin` 包，不依赖 Node.js。
+- [`kimi-code-desktop-bin`](packages/kimi-code-desktop-bin/) — 源 [Kimi Code 官网](https://kimi.com/code) 的**桌面客户端**，
+  `x86_64`。注意它和上面的 `kimi-code-bin` 是**两个不同产品、两条版本线**：桌面端是 GUI
+  （自带 Electron，版本 1.x），CLI 是终端工具（版本 2.x），两者可同时安装
+  （分别占 `/usr/bin/kimi-code` 与 `/usr/bin/kimi`）。上游没有公开仓库、也不发 GitHub
+  release，只有官网安装包，所以走的是它自带更新器的 feed（见下文 `kind`）。
+
+  > 桌面端的**内置更新器在 Arch 上不工作**：它按发行版包来区分（`resources/package-type`
+  > 是 `deb`），升级时会去调 `dpkg`。装了本包之后请一律用 `pacman -Syu` 升级，应用里若
+  > 提示更新失败属预期现象。
 
 ## 工作原理
 
@@ -28,7 +37,8 @@ workflow 每 6 小时跑一次：对 `packages/` 下每个目录
 1. 调 GitHub API 取上游 release **列表**，挑出「资产齐全 + tag 能解析成合法 pkgver」
    里版本最高的那个（`prerelease = true` 时连预发布一起纳入候选），得到 tag 与各资产
    文件的 sha256（GitHub 对每个资产直接返回 `digest`，**无需下载 200MB+ 的二进制**
-   去算校验和）；
+   去算校验和）；`kind = "electron-updater"` 的包则改读厂商更新 feed，同样自带校验和，
+   同样不用下载安装包；
 2. 去掉 tag 前缀、按可选规则 `sanitize` 成合法 `pkgver`（不含连字符），与 AUR 当前
    版本用 `vercmp` 比较；解析不了的 tag 会被跳过并在日志里列出（见下）；
 3. 若上游更新：用模板渲染出新 PKGBUILD，用 `makepkg --printsrcinfo` 生成 `.SRCINFO`；
@@ -113,16 +123,29 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 | 字段 | 作用 |
 |---|---|
 | `pkgname` / `maintainer` | 包名与 PKGBUILD 头部维护者署名 |
-| `[upstream] owner` / `repo` | GitHub 上游仓库 |
+| `[upstream] kind` | 上游类型。默认 `github-releases`（跟 GitHub release）；`electron-updater` 读厂商更新 feed，用于「没有公开仓库、只有官网安装包」的上游（如 Kimi Code 桌面端） |
+| `[upstream] owner` / `repo` | GitHub 上游仓库（`kind = "github-releases"` 时必填） |
+| `[upstream] feed` | `latest-linux.yml` 之类的更新 feed 地址（`kind = "electron-updater"` 时必填）。里面直接带版本号和各安装包的校验和，且 URL 是带版本号的，所以「查新版」只要一次几百字节的请求，不用为了看版本下载上百 MB 安装包 |
 | `[upstream] prerelease` | `true` 时把预发布也纳入候选。用于「Linux 构建只在 beta 里」这类上游 |
+| `[checksum] algorithm` | PKGBUILD 用哪种校验和：`sha256`（默认）或 `sha512`。GitHub 的资产 `digest` 是 sha256，electron-builder 的 feed 是 sha512，模板占位符和 `.SRCINFO` 里的数组名会跟着变（`{{sha512_x86_64}}` / `sha512sums_x86_64`） |
 | `[tag] strip_prefix` | 去掉 tag 前缀，`v3.8.1 → 3.8.1`。前缀对不上说明上游改了 tag 格式，该 release 会被跳过并在日志里打印 `warning: ignoring release(s) with unusable tags`，不会拿错版本去推 |
 | `[tag] sanitize` | `[正则, 替换]` 二元组，把 tag 进一步规整成合法 pkgver。`-` 在 pkgver 里非法，用它把 `1.29.0-beta.3` 收成 `1.29.0beta3`；按 vercmp 规则 `1.0beta < 1.0`，预发布天然排早于正式版，后续升正式版会被正确识别为新版本 |
-| `[assets.<arch>] name` | 各架构对应的 release 资产名模板，`{pkgver}` 会被替换 |
+| `[assets.<arch>] name` | 各架构对应的资产名模板，`{pkgver}` 会被替换 |
+| `[assets.<arch>] names` | 同上，但给一组候选名（上游改过资产命名时用），按顺序取第一个命中的 |
+| `[extras.<key>] url` | 额外的源文件（如仓库里而非 release 资产里的 LICENSE）。每次运行都会重新下载并算校验和，所以上游改了文件会自动跟上，不会因为写死的校验和让用户构建失败。URL 里可用 `{{tag}}` / `{{tag_url}}` / `{{tag_ref}}` / `{pkgver}` |
 
-模板占位符：`{{pkgver}}` `{{pkgrel}}` `{{maintainer}}` `{{tag}}`（去掉前缀前的原始 tag）、
-`{{tag_url}}`（同 `{{tag}}`，但做了 URL 转义 —— kimi-code 的 tag 形如
-`@moonshot-ai/kimi-code@2.1.1`，裸 `@` 在 URL 里含义有歧义，转义成 `%40` 后与 GitHub
-自己 `browser_download_url` 给出的形式一致），以及各架构的 `{{sha256_<arch>}}`。
+模板占位符：
+
+| 占位符 | 含义 |
+|---|---|
+| `{{pkgver}}` `{{pkgrel}}` `{{maintainer}}` | 版本、包版本号、维护者署名 |
+| `{{tag}}` | 去掉前缀前的原始 tag（`filter`/`sanitize` 之后与 pkgver 不同时用它） |
+| `{{tag_url}}` | 同上，但按 URL 路径转义（kimi-code 的 tag 形如 `@moonshot-ai/kimi-code@2.1.1`，裸 `@` 在 URL 里有歧义，转义成 `%40` 后与 GitHub 自己 `browser_download_url` 的形式一致） |
+| `{{tag_ref}}` | 同上，但按 raw.githubusercontent 的 ref 段**整段**转义（`/` 也要转成 `%2F`） |
+| `{{asset_<arch>}}` | 该架构命中的资产**真实文件名**（上游改名过时，模板不用跟着改） |
+| `{{url_asset_<arch>}}` | 该资产的下载 URL（feed 型上游的 URL 才是权威写法） |
+| `{{sha256_<arch>}}` / `{{sha512_<arch>}}` | 该资产的校验和，用哪个取决于 `[checksum] algorithm` |
+| `{{url_extra_<key>}}` / `{{sha256_extra_<key>}}` | `[extras.<key>]` 的 URL 与校验和 |
 
 ## 本地验证（不碰 AUR）
 
