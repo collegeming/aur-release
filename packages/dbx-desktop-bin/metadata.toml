@@ -1,0 +1,38 @@
+# aur-release package manifest for dbx-desktop-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+#
+# Upstream t8y2/dbx is a Rust/Tauri desktop database client. AUR already has:
+#   - `dbx`     : builds from source (rust + cargo + nodejs + pnpm toolchain)
+#   - `dbx-bin` : x86_64 only, maintained by someone else
+# Neither covers aarch64, so this package ships the official prebuilt .deb for
+# both arches. Name follows the AUR convention of suffixing `-bin` for
+# repackaged prebuilt artifacts; `dbx-desktop-bin` (rather than `dbx-bin`,
+# which is taken) makes clear it is the desktop GUI client.
+
+pkgname = "dbx-desktop-bin"
+
+# Maintainer identity used in the PKGBUILD header and as git commit author.
+maintainer = "colegeming <colegeming@outlook.com>"
+
+[upstream]
+owner = "t8y2"
+repo = "dbx"
+# Upstream publishes several times a day on a beta channel and also tags
+# stable releases (v0.6.6x). Only stable is tracked here: the beta series
+# would rewrite pkgver on the AUR several times a day, and its tags carry a
+# build timestamp (v0.6.68-beta.20261107.1) that packages awkwardly.
+prerelease = false
+
+[tag]
+# v0.6.67 -> 0.6.67
+strip_prefix = "v"
+
+# Asset names embed the version, so they differ every release
+# (DBX_0.6.67_amd64.deb). Note the upstream capitalization: the prefix is
+# uppercase "DBX_" while the arch suffix is lowercase. A fallback list keeps
+# working if upstream ever normalizes the name to dbx_*.deb.
+[assets.x86_64]
+names = ["DBX_{pkgver}_amd64.deb", "dbx_{pkgver}_amd64.deb"]
+
+[assets.aarch64]
+names = ["DBX_{pkgver}_arm64.deb", "dbx_{pkgver}_arm64.deb"]

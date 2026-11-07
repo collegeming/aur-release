@@ -19,6 +19,12 @@
   > 桌面端的**内置更新器在 Arch 上不工作**：它按发行版包来区分（`resources/package-type`
   > 是 `deb`），升级时会去调 `dpkg`。装了本包之后请一律用 `pacman -Syu` 升级，应用里若
   > 提示更新失败属预期现象。
+- [`dbx-desktop-bin`](packages/dbx-desktop-bin/) — 源 [t8y2/dbx](https://github.com/t8y2/dbx)
+  （Tauri/Rust 桌面数据库客户端），跟踪稳定版，`x86_64` + `aarch64`。
+
+  > AUR 上已有两个同上游的包：`dbx`（从源码构建，`makedepends` 需 rust/cargo/nodejs/pnpm，
+  > 装一次要拉整套构建工具链）和 `dbx-bin`（**只有 x86_64**，由他人维护）。本包补的是
+  > **aarch64**：直接解包官方 `.deb` 预编译产物，双架构都覆盖，安装时无需任何构建依赖。
 
 ## 工作原理
 
