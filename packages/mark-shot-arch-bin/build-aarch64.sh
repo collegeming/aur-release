@@ -106,10 +106,25 @@ pacman-key --populate archlinuxarm
 # GitHub's runner kernel has no Landlock, so every sync aborts with
 # "restricting filesystem access failed" and "switching to sandbox user 'alpm'
 # failed". Disable the sandbox for this throwaway build container.
-sed -i '/^#\s*DisableSandbox/d; /^DisableSandbox/d' /etc/pacman.conf
-echo 'DisableSandbox' >> /etc/pacman.conf
+#
+# DisableSandbox is an [options] directive. Appending it to the end of the file
+# puts it in whatever section is last (here [aur]), where pacman warns
+# "directive 'DisableSandbox' in section 'aur' not recognized" and ignores it,
+# so insert it directly after the [options] header instead.
+python3 - <<'PY'
+import re, pathlib
+p = pathlib.Path("/etc/pacman.conf")
+text = p.read_text()
+text = re.sub(r"(?m)^\s*DisableSandbox\s*$", "", text)
+text = re.sub(r"(?m)^\[options\]\s*$", "[options]\nDisableSandbox", text, count=1)
+p.write_text(text)
+PY
 export PACMAN_DISABLE_SANDBOX=1
-grep -n 'DisableSandbox' /etc/pacman.conf
+awk '/^\[options\]/{f=1} f{print; c++} c>3{exit}' /etc/pacman.conf
+
+# Belt and braces: some pacman builds try to drop to the 'alpm' user even with
+# the sandbox disabled. Create it so that path cannot abort the sync.
+id alpm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/bin/nologin alpm 2>/dev/null || true
 
 # Refresh the keyring first: a stale keyring makes -Syu fail on signature checks.
 pacman -Sy --noconfirm archlinuxarm-keyring || true
