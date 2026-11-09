@@ -104,6 +104,10 @@ jobs:
         uses: actions/checkout@v4
       - name: Build
         shell: bash
+        env:
+          # Authenticate API lookups: anonymous calls from runner IPs hit the
+          # 60/hour limit almost immediately.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           bash "packages/${{ matrix.package }}/build-x86_64.sh"
@@ -228,6 +232,10 @@ jobs:
         uses: actions/checkout@v4
       - name: Build (QEMU + Arch Linux ARM rootfs)
         shell: bash
+        env:
+          # Same reason as the x86_64 job: the version lookup hits the GitHub
+          # API, and anonymous calls from shared runner IPs get rate-limited.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           bash "packages/${{ matrix.package }}/build-aarch64.sh"

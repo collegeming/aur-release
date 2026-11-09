@@ -11,8 +11,14 @@ UPSTREAM_REPO="jswysnemc/mark-shot"
 OUT_DIR="${OUT_DIR:-$(pwd)/dist}"
 
 if [ -z "${MARK_SHOT_TAG:-}" ]; then
-    MARK_SHOT_TAG=$(python3 tools/update_package.py resolve "packages/${PKGNAME}" \
-        | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag"])')
+    # Capture resolve's output first: piping straight into a JSON parser turns a
+    # clean "HTTP 403" from the updater into an unreadable JSONDecodeError.
+    if ! RESOLVED=$(python3 tools/update_package.py resolve "packages/${PKGNAME}"); then
+        echo "::error::could not resolve the upstream version; see the error above" >&2
+        exit 1
+    fi
+    MARK_SHOT_TAG=$(printf '%s' "$RESOLVED" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag"])')
+    echo "==> resolved upstream tag: ${MARK_SHOT_TAG}"
 fi
 
 TAG="$MARK_SHOT_TAG"
