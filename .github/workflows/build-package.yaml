@@ -24,6 +24,8 @@ on:
 permissions:
   # Needed to create/update this repository's Release with built artifacts.
   contents: write
+  # Needed by the final job to dispatch aur-update.yaml (gh workflow run).
+  actions: write
 
 env:
   RELEASE_TAG: aur-built-latest
@@ -201,7 +203,10 @@ jobs:
     steps:
       - name: Dispatch aur-update
         env:
-          GH_TOKEN: ${{ secrets.BUILD_PUBLISH_TOKEN }}
+          # Dispatching a workflow in THIS repository uses the built-in token;
+          # BUILD_PUBLISH_TOKEN is scoped to the artifacts repo and has no
+          # workflow permissions here.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           gh workflow run aur-update.yaml \
