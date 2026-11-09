@@ -131,21 +131,22 @@ pacman -Syu --noconfirm --needed \
     base-devel cmake ninja pkgconf git libarchive zstd \
     pipewire ffmpeg qt6-base qt6-svg qt6-wayland rust
 
-cd /src
-cmake -S . -B build -G Ninja \
+# /src is mounted read-only so the checkout stays pristine; build out-of-tree in
+# a writable directory, otherwise cmake fails creating /src/build/CMakeFiles.
+cmake -S /src -B /build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DMARK_SHOT_REQUIRE_FFMPEG=ON
-cmake --build build --parallel
+cmake --build /build --parallel
 rm -rf /stage
-cmake --install build --prefix /stage/usr
+cmake --install /build --prefix /stage/usr
 
 # Files upstream's install step does not place.
 mkdir -p /stage/usr/share/licenses/"$PKGNAME"
-[ -f LICENSE ] && install -m644 LICENSE /stage/usr/share/licenses/"$PKGNAME"/LICENSE || true
-if [ -f README.md ]; then
+[ -f /src/LICENSE ] && install -m644 /src/LICENSE /stage/usr/share/licenses/"$PKGNAME"/LICENSE || true
+if [ -f /src/README.md ]; then
     mkdir -p /stage/usr/share/doc/"$PKGNAME"
-    install -m644 README.md /stage/usr/share/doc/"$PKGNAME"/README.md
+    install -m644 /src/README.md /stage/usr/share/doc/"$PKGNAME"/README.md
 fi
 
 # Soname-pinned FFmpeg deps, derived from the binary actually produced, so
