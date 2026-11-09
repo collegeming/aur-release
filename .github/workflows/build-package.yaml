@@ -20,6 +20,15 @@ on:
         description: "Package directory under packages/ (empty = all)"
         required: false
         default: ""
+      arch:
+        description: "Build only this arch (empty = all declared)"
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - x86_64
+          - aarch64
 
 permissions:
   # Needed to create/update this repository's Release with built artifacts.
@@ -52,6 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           selected="${{ github.event.inputs.package }}"
+          only_arch="${{ github.event.inputs.arch }}"
           x86="[]"
           arm="[]"
 
@@ -72,6 +82,11 @@ jobs:
           PY
           )
             for arch in $arches; do
+              # Optional arch filter, so a fix for one arch can be verified
+              # without paying for the other arch's long compile.
+              if [ -n "$only_arch" ] && [ "$arch" != "$only_arch" ]; then
+                continue
+              fi
               case "$arch" in
                 x86_64)  x86=$(printf '%s' "$x86" | jq -c --arg p "$name" '. + [{package:$p, arch:"x86_64"}]') ;;
                 aarch64) arm=$(printf '%s' "$arm" | jq -c --arg p "$name" '. + [{package:$p, arch:"aarch64"}]') ;;
