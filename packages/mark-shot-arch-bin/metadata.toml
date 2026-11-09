@@ -1,0 +1,42 @@
+# aur-release package manifest for mark-shot-arch-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+#
+# This package does NOT forward upstream's prebuilt artifacts. Upstream's own
+# aarch64 asset links against Ubuntu's FFmpeg 6 (libavcodec.so.60), which cannot
+# be installed on Arch Linux ARM where FFmpeg 9 provides .so.63 -- so it fails
+# at the pacman dependency check. Its x86_64 asset is built on Arch and works,
+# but we build both arches here so the two are consistent and both are linked
+# against the target system's own FFmpeg.
+#
+# See https://github.com/jswysnemc/mark-shot/issues/155
+
+pkgname = "mark-shot-arch-bin"
+
+maintainer = "colegeming <collegeming@outlook.com>"
+
+[upstream]
+owner = "jswysnemc"
+repo = "mark-shot"
+
+[build]
+# Compile from upstream source ourselves; build-package.yml does the work and
+# publishes the pacman packages to the release named below.
+#
+# `repo` must be PUBLIC: AUR users run makepkg anonymously, so a release asset
+# in a private repository cannot be downloaded. aur-release itself stays private
+# (it holds the publishing setup); only the binaries live in this public repo.
+kind = "self"
+repo = "collegeming/aur-built-packages"
+release_tag = "aur-built-latest"
+arches = ["x86_64", "aarch64"]
+
+[tag]
+# v0.1.62 -> 0.1.62
+strip_prefix = "v"
+
+# Artifacts are produced by our build scripts with this naming scheme.
+[assets.x86_64]
+names = ["mark-shot-arch-bin-{pkgver}-1-x86_64.pkg.tar.zst"]
+
+[assets.aarch64]
+names = ["mark-shot-arch-bin-{pkgver}-1-aarch64.pkg.tar.zst"]

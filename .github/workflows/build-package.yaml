@@ -1,0 +1,236 @@
+name: build-package
+
+# Compiles packages that declare `[build] kind = "self"` in metadata.toml and
+# attaches the resulting pacman packages to this repository's own GitHub
+# Release, so the AUR package only has to download and install them.
+#
+# Why this exists: some upstreams ship binaries built against another
+# distribution's ABI. mark-shot's aarch64 asset is linked against Ubuntu's
+# FFmpeg 6 (libavcodec.so.60), which cannot be installed on Arch Linux ARM
+# where FFmpeg 9 provides .so.63. Building here against Arch/ALARM itself
+# produces packages that actually install and run.
+
+on:
+  schedule:
+    # Offset from aur-update's cron so the two don't contend.
+    - cron: "40 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package directory under packages/ (empty = all)"
+        required: false
+        default: ""
+
+permissions:
+  # Needed to create/update this repository's Release with built artifacts.
+  contents: write
+
+env:
+  RELEASE_TAG: aur-built-latest
+  # Public repository that hosts the built pacman packages. It must be public:
+  # AUR users download these anonymously via makepkg.
+  ARTIFACT_REPO: collegeming/aur-built-packages
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # Decide which packages need building, and for which arches.
+  # ------------------------------------------------------------------ #
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix_x86_64: ${{ steps.plan.outputs.matrix_x86_64 }}
+      matrix_aarch64: ${{ steps.plan.outputs.matrix_aarch64 }}
+      empty: ${{ steps.plan.outputs.empty }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected="${{ github.event.inputs.package }}"
+          x86="[]"
+          arm="[]"
+
+          for d in packages/*/; do
+            name="$(basename "$d")"
+            meta="$d/metadata.toml"
+            [ -f "$meta" ] || continue
+            # Only packages that opt into self-building.
+            grep -qE '^[[:space:]]*kind[[:space:]]*=[[:space:]]*"self"' "$meta" || continue
+            if [ -n "$selected" ] && [ "$name" != "$selected" ]; then
+              continue
+            fi
+            arches=$(python3 - "$meta" <<'PY'
+          import re, sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          m = re.search(r'arches\s*=\s*\[([^\]]*)\]', text)
+          print(" ".join(re.findall(r'"([^"]+)"', m.group(1))) if m else "x86_64")
+          PY
+          )
+            for arch in $arches; do
+              case "$arch" in
+                x86_64)  x86=$(printf '%s' "$x86" | jq -c --arg p "$name" '. + [{package:$p, arch:"x86_64"}]') ;;
+                aarch64) arm=$(printf '%s' "$arm" | jq -c --arg p "$name" '. + [{package:$p, arch:"aarch64"}]') ;;
+                *) echo "warning: unknown arch '$arch' in $name" >&2 ;;
+              esac
+            done
+          done
+
+          echo "matrix_x86_64={\"include\":$x86}" >> "$GITHUB_OUTPUT"
+          echo "matrix_aarch64={\"include\":$arm}" >> "$GITHUB_OUTPUT"
+          nx=$(printf '%s' "$x86" | jq 'length'); na=$(printf '%s' "$arm" | jq 'length')
+          if [ "$nx" -eq 0 ] && [ "$na" -eq 0 ]; then echo "empty=1" >> "$GITHUB_OUTPUT"; else echo "empty=0" >> "$GITHUB_OUTPUT"; fi
+          echo "Planned x86_64=$nx aarch64=$na"
+
+  # ------------------------------------------------------------------ #
+  # x86_64 builds run natively inside an Arch container.
+  # ------------------------------------------------------------------ #
+  build-x86_64:
+    name: "${{ matrix.package }} (x86_64)"
+    needs: plan
+    if: needs.plan.outputs.matrix_x86_64 != '{"include":[]}' && needs.plan.outputs.matrix_x86_64 != ''
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux/archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix_x86_64) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "packages/${{ matrix.package }}/build-x86_64.sh"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.package }}-x86_64
+          path: dist/*.pkg.tar.zst*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------ #
+  # Collect every arch's package and publish them to a rolling Release in
+  # this repository. The AUR package then just points at these asset URLs.
+  # ------------------------------------------------------------------ #
+  publish:
+    name: Publish built packages
+    needs: [plan, build-x86_64, build-aarch64]
+    if: |
+      always() &&
+      needs.plan.outputs.empty == '0' &&
+      (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (manifests drive the verify step below)
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: pkg-*
+          merge-multiple: true
+
+      - name: Inspect collected packages
+        run: ls -la dist/
+
+      - name: Verify every declared arch produced a package
+        run: |
+          set -euo pipefail
+          # A partial publish is worse than none: the AUR updater waits for all
+          # configured arches before publishing a version, so a missing one
+          # would silently stall updates. Fail loudly instead.
+          missing=0
+          for f in packages/*/metadata.toml; do
+            pkg="$(basename "$(dirname "$f")")"
+            grep -qE '^[[:space:]]*kind[[:space:]]*=[[:space:]]*"self"' "$f" || continue
+            for arch in $(python3 - "$f" <<'PY'
+          import re, sys
+          m = re.search(r'arches\s*=\s*\[([^\]]*)\]', open(sys.argv[1], encoding="utf-8").read())
+          print(" ".join(re.findall(r'"([^"]+)"', m.group(1))) if m else "")
+          PY
+          ); do
+              if ! ls dist/${pkg}-*-${arch}.pkg.tar.zst >/dev/null 2>&1; then
+                echo "::error::missing $arch package for $pkg"
+                missing=1
+              fi
+            done
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "All declared arches are present."
+
+      - name: Publish rolling release
+        env:
+          # Cross-repo publishing needs a token with access to the public
+          # artifacts repository. The default GITHUB_TOKEN is scoped to this
+          # repo only, so a PAT lives in BUILD_PUBLISH_TOKEN.
+          GH_TOKEN: ${{ secrets.BUILD_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ env.RELEASE_TAG }}"
+          DEST="${{ env.ARTIFACT_REPO }}"
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::BUILD_PUBLISH_TOKEN secret is not set; cannot publish to $DEST" >&2
+            exit 1
+          fi
+          if ! gh release view "$TAG" --repo "$DEST" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$DEST" \
+              --title "Built packages (rolling)" \
+              --notes "Pacman packages built by the build-package workflow in $GITHUB_REPOSITORY. Consumed by the corresponding AUR packages."
+          fi
+          # Re-upload: assets change on every version bump.
+          gh release upload "$TAG" dist/* --repo "$DEST" --clobber
+          echo "Published to $DEST release $TAG:"
+          gh release view "$TAG" --repo "$DEST" --json assets \
+            --jq '.assets[] | "  \(.name) (\(.size) bytes)"'
+
+  # ------------------------------------------------------------------ #
+  # Hand off to the AUR updater now that artifacts exist. Without this the
+  # AUR package would wait for its own 6-hour cron and lag a whole cycle
+  # behind every upstream release.
+  # ------------------------------------------------------------------ #
+  trigger-aur-update:
+    name: Trigger AUR update
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch aur-update
+        env:
+          GH_TOKEN: ${{ secrets.BUILD_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh workflow run aur-update.yaml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "${{ github.ref_name }}" \
+            -f package=mark-shot-arch-bin
+          echo "Dispatched aur-update for mark-shot-arch-bin"
+
+  build-aarch64:
+    name: "${{ matrix.package }} (aarch64)"
+    needs: plan
+    if: needs.plan.outputs.matrix_aarch64 != '{"include":[]}' && needs.plan.outputs.matrix_aarch64 != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix_aarch64) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build (QEMU + Arch Linux ARM rootfs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "packages/${{ matrix.package }}/build-aarch64.sh"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.package }}-aarch64
+          path: dist/*.pkg.tar.zst*
+          if-no-files-found: error
+          retention-days: 14

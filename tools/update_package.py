@@ -197,6 +197,92 @@ def resolve_feed_release(meta: dict, token: str | None) -> dict:
     }
 
 
+def resolve_self_built_release(meta: dict, token: str | None) -> dict | None:
+    """Return a synthetic release built from packages we compile ourselves.
+
+    Used by `[build] kind = "self"` packages. `build-package.yml` compiles the
+    upstream source against Arch/ALARM and attaches the resulting pacman
+    packages to a rolling release in *this* repository (`repo` below). The
+    upstream release is still consulted only to learn the version to build, so
+    the AUR package version always tracks upstream even though the binaries are
+    ours.
+
+    The release object returned mimics a GitHub release (`tag_name` + `assets`
+    with `browser_download_url` and `digest`) so the rest of the pipeline --
+    asset resolution, checksumming, rendering -- works unchanged.
+    """
+    build = meta.get("build") or {}
+    repo = build.get("repo")
+    if not repo:
+        raise UpdateError('[build] kind = "self" needs repo = "owner/name"')
+
+    # Version comes from upstream, so the package tracks upstream releases;
+    # the binaries themselves are the ones we compiled.
+    upstream_tag = _latest_upstream_tag(meta, token)
+
+    # Fetch the rolling release that holds our compiled packages.
+    url = f"{GITHUB_API}/repos/{repo}/releases/tags/{build.get('release_tag', 'aur-built-latest')}"
+    release = api_get(url, token)
+    assets = release.get("assets") or []
+    if not assets:
+        raise UpdateError(
+            f"built release {build.get('release_tag')} in {repo} has no assets yet; "
+            "run the build-package workflow first"
+        )
+
+    pkgver = compute_pkgver(meta, upstream_tag)
+
+    # The build lags upstream: it only produces artifacts once its own workflow
+    # finishes. Publishing a version whose artifacts are not there yet would
+    # break AUR users with a 404, so require every configured arch to already
+    # carry the expected asset for THIS version.
+    wanted = []
+    for arch, spec in (meta.get("assets") or {}).items():
+        wanted += asset_candidates(spec, pkgver)
+    available = {a["name"] for a in assets}
+    missing = [n for n in wanted if n not in available]
+    if missing:
+        return {
+            "tag_name": upstream_tag,
+            "assets": [],
+            "self_built": True,
+            "pending_build": True,
+            "pkgver": pkgver,
+            "missing": missing,
+        }
+
+    return {
+        "tag_name": upstream_tag,
+        "assets": assets,
+        "self_built": True,
+        "pkgver": pkgver,
+    }
+
+
+def _latest_upstream_tag(meta: dict, token: str | None) -> str:
+    """Newest stable upstream tag, used to decide what version to build."""
+    upstream = meta["upstream"]
+    url = (
+        f"{GITHUB_API}/repos/{upstream['owner']}/{upstream['repo']}"
+        "/releases?per_page=30"
+    )
+    releases = api_get(url, token)
+    if not isinstance(releases, list):
+        raise UpdateError("no releases returned")
+    include_pre = bool(upstream.get("prerelease"))
+    for rel in releases:
+        if rel.get("draft"):
+            continue
+        if rel.get("prerelease") and not include_pre:
+            continue
+        try:
+            compute_pkgver(meta, rel["tag_name"])
+        except UpdateError:
+            continue
+        return rel["tag_name"]
+    raise UpdateError("no usable upstream tag found")
+
+
 def resolve_release(meta: dict, token: str | None) -> dict | None:
     """Return the upstream release to package, or None if none is usable.
 
@@ -226,6 +312,11 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
         return resolve_feed_release(meta, token)
     if kind != "github-releases":
         raise UpdateError(f"unknown [upstream] kind {kind!r}")
+
+    # Packages we compile ourselves: the version still comes from upstream, but
+    # the artifacts come from our own rolling release.
+    if (meta.get("build") or {}).get("kind") == "self":
+        return resolve_self_built_release(meta, token)
     include_prerelease = bool(upstream.get("prerelease"))
     url = (
         f"{GITHUB_API}/repos/{upstream['owner']}/{upstream['repo']}"
@@ -713,6 +804,26 @@ def resolve_assets(meta: dict, release: dict, pkgver: str,
 # --------------------------------------------------------------------------- #
 # Actions
 # --------------------------------------------------------------------------- #
+def do_resolve(pkg_dir: Path, token: str | None) -> int:
+    """Print the upstream version to build as JSON, for the build CI.
+
+    Deliberately ignores whether we already built this version: the build
+    workflow decides that by diffing against what the artifacts release holds.
+    """
+    meta = load_manifest(pkg_dir)
+    tag = _latest_upstream_tag(meta, token)
+    pkgver = compute_pkgver(meta, tag)
+    upstream = meta["upstream"]
+    print(json.dumps({
+        "pkgname": meta["pkgname"],
+        "tag": tag,
+        "pkgver": pkgver,
+        "url": f"https://github.com/{upstream['owner']}/{upstream['repo']}",
+        "source_ref": tag,
+    }))
+    return 0
+
+
 def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) -> None:
     meta = load_manifest(pkg_dir)
     template = read_template(pkg_dir)
@@ -780,6 +891,14 @@ def do_update(
         print(
             f"{pkgbase}: no upstream release has all configured assets "
             "(upstream published a tag without binaries?); waiting"
+        )
+        return 2
+    if release.get("pending_build"):
+        missing = ", ".join(release.get("missing") or [])
+        print(
+            f"{pkgbase}: upstream is at {release.get('pkgver')} but our build has "
+            f"not produced the artifacts yet (missing: {missing}); waiting for "
+            "build-package workflow"
         )
         return 2
     tag = release["tag_name"]
@@ -935,6 +1054,12 @@ def main() -> int:
     p_update.add_argument("pkg_dir", type=Path)
     p_update.add_argument("--quiet", action="store_true")
 
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="print the upstream tag/version to build as JSON (for build CI)",
+    )
+    p_resolve.add_argument("pkg_dir", type=Path)
+
     args = parser.parse_args()
     token = (
         __import__("os").environ.get("GITHUB_TOKEN")
@@ -944,6 +1069,8 @@ def main() -> int:
     try:
         if args.cmd == "render":
             do_render(args.pkg_dir.resolve(), args.out.resolve(), token, args.tag)
+        elif args.cmd == "resolve":
+            return do_resolve(args.pkg_dir.resolve(), token)
         else:
             return do_update(args.pkg_dir.resolve(), token, args.quiet)
         return 0
