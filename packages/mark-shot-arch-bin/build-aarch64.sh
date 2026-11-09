@@ -38,11 +38,20 @@ mkdir -p "$WORK/rootfs" "$OUT_DIR"
 # --------------------------------------------------------------------------- #
 # 1. arm64 emulation
 # --------------------------------------------------------------------------- #
-if ! docker run --rm --platform linux/arm64 alpine uname -m 2>/dev/null | grep -q aarch64; then
-    echo "==> registering arm64 binfmt"
-    docker run --rm --privileged tonistiigi/binfmt --install arm64
+# GitHub's ubuntu runners do NOT ship aarch64 binfmt handlers -- running an
+# arm64 container without this fails with "exec format error". Register
+# unconditionally (it is idempotent) instead of probing first: a probe piped
+# into `grep -q` under `set -o pipefail` reports failure in confusing ways and
+# can skip the registration entirely.
+echo "==> registering arm64 binfmt"
+docker run --rm --privileged tonistiigi/binfmt --install arm64
+
+# Hard requirement: if emulation still is not available, stop now rather than
+# failing later with an opaque chroot error.
+if ! docker run --rm --platform linux/arm64 alpine uname -m; then
+    echo "::error::arm64 emulation unavailable on this runner" >&2
+    exit 1
 fi
-docker run --rm --platform linux/arm64 alpine uname -m
 
 # --------------------------------------------------------------------------- #
 # 2. Arch Linux ARM userspace
@@ -93,10 +102,10 @@ cmake --install build --prefix /root/stage/usr
 
 # License/doc that the install step does not handle.
 mkdir -p /root/stage/usr/share/licenses/PKGNAME
-install -m644 LICENSE /root/stage/usr/share/licenses/PKGNAME/LICENSE || true
-if [ -f README.md ]; then
+install -m644 /root/src/LICENSE /root/stage/usr/share/licenses/PKGNAME/LICENSE || true
+if [ -f /root/src/README.md ]; then
     mkdir -p /root/stage/usr/share/doc/PKGNAME
-    install -m644 README.md /root/stage/usr/share/doc/PKGNAME/README.md
+    install -m644 /root/src/README.md /root/stage/usr/share/doc/PKGNAME/README.md
 fi
 INNER
 sed -i "s/PKGNAME/${PKGNAME}/g" "$WORK/build-in-container.sh"
