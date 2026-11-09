@@ -111,16 +111,15 @@ pacman-key --populate archlinuxarm
 # puts it in whatever section is last (here [aur]), where pacman warns
 # "directive 'DisableSandbox' in section 'aur' not recognized" and ignores it,
 # so insert it directly after the [options] header instead.
-python3 - <<'PY'
-import re, pathlib
-p = pathlib.Path("/etc/pacman.conf")
-text = p.read_text()
-text = re.sub(r"(?m)^\s*DisableSandbox\s*$", "", text)
-text = re.sub(r"(?m)^\[options\]\s*$", "[options]\nDisableSandbox", text, count=1)
-p.write_text(text)
-PY
+#
+# Plain awk: the ALARM base rootfs has no python3 yet at this point.
+awk '
+  /^\[options\][[:space:]]*$/ && !done { print; print "DisableSandbox"; done=1; next }
+  /^[[:space:]]*DisableSandbox[[:space:]]*$/ { next }
+  { print }
+' /etc/pacman.conf > /etc/pacman.conf.new && mv /etc/pacman.conf.new /etc/pacman.conf
 export PACMAN_DISABLE_SANDBOX=1
-awk '/^\[options\]/{f=1} f{print; c++} c>3{exit}' /etc/pacman.conf
+grep -A2 '^\[options\]' /etc/pacman.conf
 
 # Belt and braces: some pacman builds try to drop to the 'alpm' user even with
 # the sandbox disabled. Create it so that path cannot abort the sync.
