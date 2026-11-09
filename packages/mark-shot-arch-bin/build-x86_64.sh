@@ -25,6 +25,20 @@ TAG="$MARK_SHOT_TAG"
 VERSION="${TAG#v}"
 echo "==> building ${PKGNAME} ${VERSION} for x86_64"
 
+# pacman 7+ sandboxes downloads with Landlock and drops to the 'alpm' user.
+# The runner kernel lacks Landlock support, which aborts every database sync
+# with "restricting filesystem access failed". This container is disposable and
+# already root, so disable the sandbox. DisableSandbox is an [options]
+# directive -- appending it to the file would land in whatever section is last,
+# where pacman ignores it.
+awk '
+  /^\[options\][[:space:]]*$/ && !done { print; print "DisableSandbox"; done=1; next }
+  /^[[:space:]]*DisableSandbox[[:space:]]*$/ { next }
+  { print }
+' /etc/pacman.conf > /etc/pacman.conf.new && mv /etc/pacman.conf.new /etc/pacman.conf
+export PACMAN_DISABLE_SANDBOX=1
+id alpm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/bin/nologin alpm 2>/dev/null || true
+
 pacman -Syu --noconfirm --needed \
     base-devel cmake ninja pkgconf git curl python \
     pipewire ffmpeg qt6-base qt6-svg qt6-wayland layer-shell-qt rust
