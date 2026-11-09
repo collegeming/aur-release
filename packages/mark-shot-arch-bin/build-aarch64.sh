@@ -93,7 +93,9 @@ echo "==> linked ffmpeg sonames: ${SONAMES:-none}"
     done
     while IFS= read -r so; do
         [ -n "$so" ] || continue
-        echo "depend = ${so}=${so##*.}-64"
+        # "libavcodec.so.63" -> "libavcodec.so=63-64" (see build-x86_64.sh)
+        base="${so%.so.*}"
+        echo "depend = ${base}.so=${so##*.}-64"
     done <<< "$SONAMES"
     echo "provides = mark-shot"
     echo "conflicts = mark-shot mark-shot-bin"

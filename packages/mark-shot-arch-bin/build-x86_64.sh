@@ -38,16 +38,16 @@ run_as_builder() {
 git clone --depth 1 --branch "$TAG" "https://github.com/${UPSTREAM_REPO}.git" src
 chown -R builder:builder "$WORK"
 
+STAGE="$WORK/stage"
+
 run_as_builder '
 cmake -S src -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DMARK_SHOT_REQUIRE_FFMPEG=ON
 cmake --build build --parallel
-cmake --install build --prefix "'"$WORK"'/stage/usr"
+cmake --install build --prefix stage/usr
 '
-
-STAGE="$WORK/stage"
 mkdir -p "$STAGE/usr/share/licenses/${PKGNAME}"
 install -m644 "$WORK/src/LICENSE" "$STAGE/usr/share/licenses/${PKGNAME}/LICENSE"
 [ -f "$WORK/src/README.md" ] && install -Dm644 "$WORK/src/README.md" "$STAGE/usr/share/doc/${PKGNAME}/README.md"
@@ -73,7 +73,11 @@ echo "==> linked ffmpeg sonames: ${SONAMES[*]:-none}"
     done
     for so in "${SONAMES[@]:-}"; do
         [ -n "$so" ] || continue
-        echo "depend = ${so}=${so##*.}-64"
+        # "libavcodec.so.63" -> "libavcodec.so=63-64": pacman wants the library
+        # name (minus the numeric suffix) plus the exact soname version.
+        base="${so%.so.*}"
+        ver="${so##*.}"
+        echo "depend = ${base}.so=${ver}-64"
     done
     echo "provides = mark-shot"
     echo "conflicts = mark-shot mark-shot-bin"
