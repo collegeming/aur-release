@@ -101,6 +101,16 @@ UPSTREAM_REPO="${UPSTREAM_REPO:?}"
 
 pacman-key --init
 pacman-key --populate archlinuxarm
+
+# pacman 7+ sandboxes downloads with Landlock and drops to the 'alpm' user.
+# GitHub's runner kernel has no Landlock, so every sync aborts with
+# "restricting filesystem access failed" and "switching to sandbox user 'alpm'
+# failed". Disable the sandbox for this throwaway build container.
+sed -i '/^#\s*DisableSandbox/d; /^DisableSandbox/d' /etc/pacman.conf
+echo 'DisableSandbox' >> /etc/pacman.conf
+export PACMAN_DISABLE_SANDBOX=1
+grep -n 'DisableSandbox' /etc/pacman.conf
+
 # Refresh the keyring first: a stale keyring makes -Syu fail on signature checks.
 pacman -Sy --noconfirm archlinuxarm-keyring || true
 pacman -Syu --noconfirm --needed \
