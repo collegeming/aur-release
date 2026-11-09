@@ -53,7 +53,16 @@ docker run --rm --platform linux/arm64 alpine uname -m
 if [ ! -x "$WORK/rootfs/usr/bin/pacman" ]; then
     echo "==> fetching Arch Linux ARM rootfs (~830MB)"
     curl -fsSL --retry 3 -o "$WORK/alarm.tar.gz" "$ROOTFS_URL"
-    tar -xzf "$WORK/alarm.tar.gz" -C "$WORK/rootfs"
+    # Must be root: the tarball carries root-owned entries and special files
+    # (setuid helpers, capability xattrs). Extracting as the runner user fails
+    # with "Cannot create symlink ...: Permission denied".
+    sudo mkdir -p "$WORK/rootfs"
+    sudo tar -xzf "$WORK/alarm.tar.gz" -C "$WORK/rootfs" 2>&1 | grep -v "Ignoring unknown extended header" || true
+    if [ ! -x "$WORK/rootfs/usr/bin/pacman" ]; then
+        echo "::error::rootfs extraction incomplete; pacman not found" >&2
+        exit 1
+    fi
+    echo "==> rootfs ready"
 fi
 
 cat > "$WORK/build-in-container.sh" <<'INNER'
@@ -90,51 +99,83 @@ rm -rf "$WORK/src"
 git clone --depth 1 --branch "$TAG" "https://github.com/${UPSTREAM_REPO}.git" "$WORK/src"
 
 echo "==> building inside emulated Arch Linux ARM (this takes a while)"
+# --privileged is required: chroot needs to create device nodes and change
+# ownership inside a rootfs whose files are root-owned on the host.
 docker run --rm --privileged --platform linux/arm64 \
     -v "$WORK/rootfs:/arch" \
     -v "$WORK/src:/root/src:ro" \
     -v "$WORK/build-in-container.sh:/build.sh:ro" \
     alpine chroot /arch /bin/bash /build.sh
-
 # --------------------------------------------------------------------------- #
 # 3. Package it
 # --------------------------------------------------------------------------- #
-STAGE="$WORK/rootfs/root/stage"
-if [ ! -x "$STAGE/usr/bin/mark-shot" ]; then
+# Packaging happens INSIDE the emulated environment: the staged tree is
+# root-owned (it came from a chroot build), so writing .PKGINFO and reading the
+# files from the host would need sudo all over -- and the host has no aarch64
+# loader for ldd anyway.
+STAGE="/root/stage"
+if [ ! -x "$WORK/rootfs$STAGE/usr/bin/mark-shot" ]; then
     echo "::error::build produced no mark-shot binary at $STAGE/usr/bin/mark-shot" >&2
     exit 1
 fi
 
-SONAMES=$(docker run --rm --privileged --platform linux/arm64 \
-    -v "$WORK/rootfs:/arch" alpine chroot /arch /bin/bash -c \
-    "ldd /root/stage/usr/bin/mark-shot 2>/dev/null | grep -oE 'lib(av|sw)[a-z]+\.so\.[0-9]+' | sort -u" || true)
-echo "==> linked ffmpeg sonames: ${SONAMES:-none}"
+cat > "$WORK/package-in-container.sh" <<INNER_PKG
+set -euo pipefail
+STAGE="${STAGE}"
+PKGNAME="${PKGNAME}"
+VERSION="${VERSION}"
+UPSTREAM_REPO="${UPSTREAM_REPO}"
+
+# License/doc that upstream's install step does not place.
+mkdir -p "\$STAGE/usr/share/licenses/\$PKGNAME"
+if [ -f /root/src/LICENSE ]; then
+    install -m644 /root/src/LICENSE "\$STAGE/usr/share/licenses/\$PKGNAME/LICENSE"
+fi
+if [ -f /root/src/README.md ]; then
+    mkdir -p "\$STAGE/usr/share/doc/\$PKGNAME"
+    install -m644 /root/src/README.md "\$STAGE/usr/share/doc/\$PKGNAME/README.md"
+fi
+
+SONAMES=\$(ldd "\$STAGE/usr/bin/mark-shot" 2>/dev/null | grep -oE 'lib(av|sw)[a-z]+\.so\.[0-9]+' | sort -u || true)
+echo "==> linked ffmpeg sonames: \${SONAMES:-none}"
 
 {
-    echo "pkgname = ${PKGNAME}"
-    echo "pkgver = ${VERSION}-1"
+    echo "pkgname = \$PKGNAME"
+    echo "pkgver = \$VERSION-1"
     echo "pkgdesc = Qt 6 Wayland screenshot selection and annotation tool (built against Arch Linux ARM aarch64)"
-    echo "url = https://github.com/${UPSTREAM_REPO}"
-    echo "builddate = $(date +%s)"
+    echo "url = https://github.com/\$UPSTREAM_REPO"
+    echo "builddate = \$(date +%s)"
     echo "packager = aur-release <noreply@github.com>"
-    echo "size = $(du -sb "$STAGE/usr" | cut -f1)"
+    echo "size = \$(du -sb "\$STAGE/usr" | cut -f1)"
     echo "arch = aarch64"
     echo "license = MIT"
     for d in qt6-base qt6-svg qt6-wayland pipewire grim wl-clipboard hicolor-icon-theme python; do
-        echo "depend = $d"
+        echo "depend = \$d"
     done
     while IFS= read -r so; do
-        [ -n "$so" ] || continue
+        [ -n "\$so" ] || continue
         # "libavcodec.so.63" -> "libavcodec.so=63-64" (pacman wants name+soname)
-        echo "depend = ${so%.so.*}.so=${so##*.}-64"
-    done <<< "$SONAMES"
+        echo "depend = \${so%.so.*}.so=\${so##*.}-64"
+    done <<< "\$SONAMES"
     echo "provides = mark-shot"
     echo "conflicts = mark-shot mark-shot-bin"
-} > "$STAGE/.PKGINFO"
+} > "\$STAGE/.PKGINFO"
+
+OUT="/out/\${PKGNAME}-\${VERSION}-1-aarch64.pkg.tar.zst"
+bsdtar --zstd -C "\$STAGE" -cf "\$OUT" .PKGINFO usr
+chmod 666 "\$OUT"
+echo "==> packaged \$(basename "\$OUT")"
+INNER_PKG
+chmod +x "$WORK/package-in-container.sh"
+
+docker run --rm --privileged --platform linux/arm64 \
+    -v "$WORK/rootfs:/arch" \
+    -v "$WORK/src:/root/src:ro" \
+    -v "$WORK/package-in-container.sh:/package.sh:ro" \
+    -v "$OUT_DIR:/out" \
+    alpine chroot /arch /bin/bash /package.sh
 
 ASSET="${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst"
-sudo rm -f "$OUT_DIR/$ASSET" 2>/dev/null || rm -f "$OUT_DIR/$ASSET" 2>/dev/null || true
-bsdtar --zstd -C "$STAGE" -cf "$OUT_DIR/$ASSET" .PKGINFO usr
 sha256sum "$OUT_DIR/$ASSET" | sed "s| .*/| |" > "$OUT_DIR/$ASSET.sha256"
 
 echo "==> built $ASSET"
