@@ -53,13 +53,21 @@ docker run --rm --platform linux/arm64 alpine uname -m
 if [ ! -x "$WORK/rootfs/usr/bin/pacman" ]; then
     echo "==> fetching Arch Linux ARM rootfs (~830MB)"
     curl -fsSL --retry 3 -o "$WORK/alarm.tar.gz" "$ROOTFS_URL"
+    ls -la "$WORK/alarm.tar.gz"
+
     # Must be root: the tarball carries root-owned entries and special files
     # (setuid helpers, capability xattrs). Extracting as the runner user fails
     # with "Cannot create symlink ...: Permission denied".
+    sudo rm -rf "$WORK/rootfs"
     sudo mkdir -p "$WORK/rootfs"
-    sudo tar -xzf "$WORK/alarm.tar.gz" -C "$WORK/rootfs" 2>&1 | grep -v "Ignoring unknown extended header" || true
+    # --numeric-owner keeps the rootfs's own uid/gid mapping; xattrs are warned
+    # about (runner kernel lacks some) but are not needed for a build.
+    sudo tar --numeric-owner -xzf "$WORK/alarm.tar.gz" -C "$WORK/rootfs" \
+        || { echo "::error::rootfs extraction failed" >&2; exit 1; }
+
     if [ ! -x "$WORK/rootfs/usr/bin/pacman" ]; then
-        echo "::error::rootfs extraction incomplete; pacman not found" >&2
+        echo "::error::rootfs incomplete: pacman missing after extraction" >&2
+        sudo ls -la "$WORK/rootfs" | head -20 >&2
         exit 1
     fi
     echo "==> rootfs ready"

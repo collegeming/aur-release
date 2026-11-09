@@ -1,0 +1,28 @@
+name: probe-arm
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: A. can Docker run arm64 at all?
+        run: docker run --rm --platform linux/arm64 alpine uname -m
+
+      - name: B. does binfmt already handle it without tonistiigi?
+        run: |
+          ls /proc/sys/fs/binfmt_misc/ 2>/dev/null | head
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null | head -5 || echo "no qemu-aarch64 registered"
+
+      - name: C. download ALARM rootfs and inspect pacman path
+        run: |
+          curl -fsSL --retry 2 -o /tmp/alarm.tar.gz http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+          ls -la /tmp/alarm.tar.gz
+          tar -tzf /tmp/alarm.tar.gz | grep -E "bin/pacman$" | head -3
+          echo "--- count entries ---"
+          tar -tzf /tmp/alarm.tar.gz | wc -l
+
+      - name: D. extract and try chroot under emulation
+        run: |
+          sudo mkdir -p /arch && sudo tar --numeric-owner -xzf /tmp/alarm.tar.gz -C /arch
+          ls -la /arch/usr/bin/pacman
+          docker run --rm --privileged --platform linux/arm64 -v /arch:/arch alpine \
+            chroot /arch /usr/bin/pacman --version
