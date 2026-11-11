@@ -4,7 +4,7 @@ pkgname=snishaper-bin
 pkgver={{pkgver}}
 pkgrel={{pkgrel}}
 pkgdesc='Local proxy to bypass SNI blocking via ECH injection, TLS fragmentation, QUIC and a TUN device (prebuilt binary)'
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url='https://github.com/SnishaperTeam/SniShaper'
 license=('AGPL-3.0-only')
 # Wails v3 + GTK4 + WebKitGTK 6.0 frontend. The TUN/route plumbing speaks
@@ -22,7 +22,9 @@ options=('!strip')
 # fails on every upgrade.
 #
 # The icon and LICENSE come from the repo at the release tag (see [extras] in
-# metadata.toml); their URLs and checksums are filled in by the updater.
+# metadata.toml); their URLs and checksums are filled in by the updater. They
+# are arch-independent but must be listed in each arch array: makepkg uses only
+# the array matching $CARCH, so there is no duplicate-download conflict.
 source_x86_64=(
     "snishaper-${pkgver}-linux-x64.tar.gz::https://github.com/SnishaperTeam/SniShaper/releases/download/{{tag}}/{{asset_x86_64}}"
     "snishaper-${pkgver}-icon.png::{{url_extra_icon}}"
@@ -30,6 +32,16 @@ source_x86_64=(
 )
 sha256sums_x86_64=(
     '{{sha256_x86_64}}'
+    '{{sha256_extra_icon}}'
+    '{{sha256_extra_license}}'
+)
+source_aarch64=(
+    "snishaper-${pkgver}-linux-arm64.tar.gz::https://github.com/SnishaperTeam/SniShaper/releases/download/{{tag}}/{{asset_aarch64}}"
+    "snishaper-${pkgver}-icon.png::{{url_extra_icon}}"
+    "snishaper-${pkgver}-LICENSE::{{url_extra_license}}"
+)
+sha256sums_aarch64=(
+    '{{sha256_aarch64}}'
     '{{sha256_extra_icon}}'
     '{{sha256_extra_license}}'
 )

@@ -6,7 +6,7 @@
 目前接入的包：
 
 - [`siyuan-unlock-bin`](packages/siyuan-unlock-bin/) — 源 [appdev/siyuan-unlock](https://github.com/appdev/siyuan-unlock)，跟踪稳定版，`x86_64` + `aarch64`。
-- [`snishaper-bin`](packages/snishaper-bin/) — 源 [SnishaperTeam/SniShaper](https://github.com/SnishaperTeam/SniShaper)，跟踪预发布（Linux 构建目前只在 beta 系列里）。
+- [`snishaper-bin`](packages/snishaper-bin/) — 源 [SnishaperTeam/SniShaper](https://github.com/SnishaperTeam/SniShaper)，跟踪稳定版，`x86_64` + `aarch64`（上游自 v1.30.0 起提供 arm64 GUI 包）。
 - [`kimi-code-bin`](packages/kimi-code-bin/) — 源 [MoonshotAI/kimi-code](https://github.com/MoonshotAI/kimi-code)，跟踪稳定版，`x86_64` + `aarch64`。
   AUR 上已有一个 `kimi-code`，走 npm 方式安装、运行时要 nodejs；这里做的是官方「独立二进制」
   的 `-bin` 包，不依赖 Node.js。

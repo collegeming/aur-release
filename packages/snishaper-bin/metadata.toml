@@ -9,12 +9,13 @@ maintainer = "colegeming <collegeming@outlook.com>"
 [upstream]
 owner = "SnishaperTeam"
 repo = "SniShaper"
-# The Linux GUI build only ships in the v1.29.0-beta.x prerelease series so
-# far; the latest stable (v1.28) carries Windows-only assets. Track
-# prereleases so the package works today and upgrades seamlessly once v1.29.0
-# stable lands -- vercmp sorts "1.29.0beta3" older than "1.29.0", so the stable
-# release will be detected as a genuine version bump.
-prerelease = true
+# Stable-only from v1.30.0 on: that release ships Linux builds for both arches
+# (snishaper-linux-x64.tar.gz + snishaper-linux-arm64.tar.gz), so the original
+# reason for tracking prereleases -- stable v1.28 carried Windows-only assets
+# and the Linux build existed only in the v1.29.0-beta.x series -- no longer
+# holds. Keeping it on would publish future alphas to AUR users, since
+# vercmp orders e.g. 1.31.0alpha1 ABOVE the current stable 1.30.0.
+prerelease = false
 
 [tag]
 # v1.29.0-beta.3 -> 1.29.0-beta.3 (prefix stripped)
@@ -28,6 +29,15 @@ sanitize = ["-(alpha|beta|rc)\\.", "\\1"]
 # Upstream renamed the Linux asset in v1.29.1 (amd64 -> x64). List both so old
 # and new releases both resolve; the updater picks whichever exists.
 names = ["snishaper-linux-x64.tar.gz", "snishaper-linux-amd64.tar.gz"]
+
+[assets.aarch64]
+# Upstream started shipping an aarch64 GUI tarball in v1.29.1 (verified: the
+# archive's SniShaper is an ELF aarch64 binary with the same ./SniShaper
+# ./config/ ./rules/ layout). Declaring it here makes the AUR package
+# multi-arch; before this the PKGBUILD said arch=('x86_64') and pacman refused
+# to install on Arch Linux ARM. Releases that lack this asset are skipped by
+# resolve_release, which requires every configured arch to be present.
+names = ["snishaper-linux-arm64.tar.gz"]
 
 # Files that live in the repo rather than in a release asset. Pin them to the
 # release TAG (immutable) instead of `main`: a moving branch changes content
