@@ -7,11 +7,10 @@ pkgdesc='Qt 6 Wayland screenshot selection and annotation tool (built against Ar
 arch=('x86_64' 'aarch64')
 url='https://github.com/jswysnemc/mark-shot'
 license=('MIT')
-# Runtime deps are baked into the package we built, so these mirror the
-# generated .PKGINFO. layer-shell-qt is x86_64-only: the ALARM build disables
-# the layer-shell integration (same as upstream's Ubuntu build).
-depends=('qt6-base' 'qt6-svg' 'qt6-wayland' 'pipewire' 'grim' 'wl-clipboard' 'hicolor-icon-theme' 'python')
-depends_x86_64=('layer-shell-qt')
+# Runtime deps mirror the generated .PKGINFO. layer-shell-qt is required on both
+# arches: our builds compile the optional libmark-shot-layer-shell.so plugin
+# (upstream's own aarch64 asset was built without it, see jswysnemc/mark-shot#155).
+depends=('qt6-base' 'qt6-svg' 'qt6-wayland' 'layer-shell-qt' 'pipewire' 'grim' 'wl-clipboard' 'hicolor-icon-theme' 'python')
 provides=('mark-shot')
 conflicts=('mark-shot' 'mark-shot-bin')
 options=('!strip' '!debug')
@@ -39,6 +38,14 @@ package() {
     esac
 
     bsdtar -xf "${srcdir}/${pkg}" -C "${pkgdir}" --exclude '.PKGINFO' --exclude '.BUILDINFO' --exclude '.MTREE'
+
+    # Both of our builds compile the optional layer-shell plugin; a package
+    # without it silently degrades on tiling compositors (hyprland/sway), which
+    # is exactly the defect upstream's own aarch64 asset has.
+    if [ ! -f "${pkgdir}/usr/lib/mark-shot/libmark-shot-layer-shell.so" ]; then
+        echo "error: prebuilt package is missing libmark-shot-layer-shell.so" >&2
+        return 1
+    fi
 
     chmod -R u=rwX,go=rX "${pkgdir}"
 }

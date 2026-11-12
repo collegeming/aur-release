@@ -1,0 +1,119 @@
+name: build
+
+# Compiles mark-shot against Arch Linux (x86_64) and Arch Linux ARM (aarch64)
+# and publishes the pacman packages to the `aur-built-latest` release in this
+# repository. The AUR package mark-shot-arch-bin points its source URLs here.
+#
+# Why self-built: upstream's own aarch64 asset is linked against Ubuntu's
+# FFmpeg 6 (libavcodec.so.60) and cannot be installed on Arch Linux ARM, where
+# FFmpeg 9 provides .so.63. See jswysnemc/mark-shot#155.
+#
+# aarch64 runs on a NATIVE arm64 runner, so no QEMU is involved -- an emulated
+# Qt6+Rust compile exceeds GitHub's 6-hour job limit on x86_64 runners.
+
+on:
+  schedule:
+    # Offset from aur-update's cron so freshly built packages get picked up on
+    # the next pass.
+    - cron: "53 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Build only this arch (empty = both)"
+        required: false
+        default: ""
+        type: choice
+        options:
+          - ""
+          - x86_64
+          - aarch64
+
+permissions:
+  contents: write # create/update the aur-built-latest release
+
+concurrency:
+  group: mark-shot-arch-bin-build
+  cancel-in-progress: false
+
+jobs:
+  build-x86_64:
+    if: github.event.inputs.arch == '' || github.event.inputs.arch == 'x86_64'
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    timeout-minutes: 120
+    steps:
+      - name: Bootstrap (DisableSandbox + git/nodejs for the checkout action)
+        shell: bash
+        run: |
+          awk '
+            /^\[options\][[:space:]]*$/ && !done { print; print "DisableSandbox"; done=1; next }
+            /^[[:space:]]*DisableSandbox[[:space:]]*$/ { next }
+            { print }
+          ' /etc/pacman.conf > /etc/pacman.conf.new && mv /etc/pacman.conf.new /etc/pacman.conf
+          pacman -Syu --noconfirm --needed git nodejs curl python
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: bash scripts/build-x86_64.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-x86_64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-aarch64:
+    if: github.event.inputs.arch == '' || github.event.inputs.arch == 'aarch64'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: bash scripts/build-aarch64.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-aarch64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [build-x86_64, build-aarch64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: pkg-*
+          merge-multiple: true
+
+      - name: Verify both arches are present
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          ls dist/*-x86_64.pkg.tar.zst >/dev/null || { echo "::error::missing x86_64 package" >&2; exit 1; }
+          ls dist/*-aarch64.pkg.tar.zst >/dev/null || { echo "::error::missing aarch64 package" >&2; exit 1; }
+
+      - name: Publish to the aur-built-latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="aur-built-latest"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Built packages (rolling)" \
+              --notes "Pacman packages built from jswysnemc/mark-shot releases. Consumed by the AUR package mark-shot-arch-bin."
+          fi
+          gh release upload "$TAG" dist/* --clobber
+          gh release view "$TAG" --json assets --jq '.assets[] | "  \(.name) (\(.size) bytes)"'
