@@ -25,6 +25,16 @@
   > AUR 上已有两个同上游的包：`dbx`（从源码构建，`makedepends` 需 rust/cargo/nodejs/pnpm，
   > 装一次要拉整套构建工具链）和 `dbx-bin`（**只有 x86_64**，由他人维护）。本包补的是
   > **aarch64**：直接解包官方 `.deb` 预编译产物，双架构都覆盖，安装时无需任何构建依赖。
+- [`mark-shot-arch-bin`](packages/mark-shot-arch-bin/) — 源 [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot)
+  （Qt 6 Wayland 截图/标注工具），`x86_64` + `aarch64`。
+
+  > **自建预编译包**：上游的 aarch64 资产是在 Ubuntu 上编的（FFmpeg 6，`libavcodec.so.60`），
+  > Arch Linux ARM 提供的是 FFmpeg 9（`.so.63`），pacman 直接拒绝安装；该资产还缺少
+  > `libmark-shot-layer-shell.so`（构建机没装 LayerShellQt，可选插件被静默跳过）。所以本包
+  > 不用上游二进制，改由公开仓库
+  > [collegeming/aur-built-packages](https://github.com/collegeming/aur-built-packages)
+  > 在 Arch / Arch Linux ARM 里原生编译（aarch64 跑在原生 arm64 runner 上），本包只下载
+  > 解包，用户端不需要任何构建工具链。
 
 ## 工作原理
 
@@ -49,6 +59,11 @@ workflow 每 6 小时跑一次：对 `packages/` 下每个目录
    版本用 `vercmp` 比较；解析不了的 tag 会被跳过并在日志里列出（见下）；
 3. 若上游更新：用模板渲染出新 PKGBUILD，用 `makepkg --printsrcinfo` 生成 `.SRCINFO`；
 4. `git clone` AUR 仓库 → 提交 → push（AUR 禁止 force-push，只会线性追加）。
+
+`[build] kind = "self"` 的包不由本仓库编译：产物在公开仓库
+[collegeming/aur-built-packages](https://github.com/collegeming/aur-built-packages) 里构建、
+挂到 `aur-built-latest` 滚动 release；本仓库只负责「等各架构产物齐全 → 渲染 PKGBUILD →
+推 AUR」。
 
 上游 tag 格式、资产命名等差异都收敛在每包的 `metadata.toml` 里，换一个项目基本不用改脚本。
 
@@ -139,6 +154,9 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 | `[assets.<arch>] name` | 各架构对应的资产名模板，`{pkgver}` 会被替换 |
 | `[assets.<arch>] names` | 同上，但给一组候选名（上游改过资产命名时用），按顺序取第一个命中的 |
 | `[extras.<key>] url` | 额外的源文件（如仓库里而非 release 资产里的 LICENSE）。每次运行都会重新下载并算校验和，所以上游改了文件会自动跟上，不会因为写死的校验和让用户构建失败。URL 里可用 `{{tag}}` / `{{tag_url}}` / `{{tag_ref}}` / `{pkgver}` |
+| `[build] kind` | `"self"` 表示产物由本项目编译，不用上游二进制。此时 `[assets.<arch>]` 匹配的是**本仓库产物**的文件名；`resolve` 先查 `[build] repo` 的滚动 release，产物不齐就返回 `pending_build`，AUR 不会抢先发布一个没有产物的版本 |
+| `[build] repo` / `[build] release_tag` | 存放自建产物的公开仓库与滚动 release 标签（如 `collegeming/aur-built-packages` + `aur-built-latest`）。仓库必须公开：用户端 `makepkg` 是匿名下载 |
+| `[build] arches` | 需要自建、且要等产物齐全的架构列表；列表里每个架构都有产物后才发布 |
 
 模板占位符：
 
