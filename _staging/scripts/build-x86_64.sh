@@ -103,9 +103,13 @@ mkdir -p "$STAGE/usr/share/licenses/${PKGNAME}"
 install -m644 "$WORK/src/LICENSE" "$STAGE/usr/share/licenses/${PKGNAME}/LICENSE"
 [ -f "$WORK/src/README.md" ] && install -Dm644 "$WORK/src/README.md" "$STAGE/usr/share/doc/${PKGNAME}/README.md" || true
 
-# Soname-pinned FFmpeg deps: pacman refuses the package on an FFmpeg generation
-# mismatch instead of letting it break at runtime.
-mapfile -t SONAMES < <(ldd "$STAGE/usr/bin/mark-shot" 2>/dev/null \
+# Soname-pinned FFmpeg deps: pacman then refuses to install on a system whose
+# FFmpeg generation differs, instead of failing later at runtime. The main
+# binary does not link FFmpeg itself -- the recording backend plugin does, so
+# both have to be inspected.
+mapfile -t SONAMES < <( { ldd "$STAGE/usr/bin/mark-shot"
+                          for so in "$STAGE"/usr/lib/mark-shot/recording/*.so; do ldd "$so"; done
+                        } 2>/dev/null \
     | grep -oE 'lib(av|sw)[a-z]+\.so\.[0-9]+' | sort -u || true)
 echo "==> linked ffmpeg sonames: ${SONAMES[*]:-none}"
 

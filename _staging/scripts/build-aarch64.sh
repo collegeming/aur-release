@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Build mark-shot for aarch64 against Arch Linux ARM.
+# Build mark-shot for aarch64 against Arch Linux ARM on a NATIVE arm64 runner.
 #
-# Runs on a NATIVE arm64 GitHub runner (ubuntu-24.04-arm), so no emulation is
-# needed: the ALARM rootfs is entered with plain chroot and everything compiles
-# natively. This is minutes, not the hours the QEMU path took (it exceeded
-# GitHub's 6-hour job limit on an x86_64 runner).
+# The ALARM rootfs is imported as a container image and the build runs inside a
+# container from it. Docker supplies working DNS, /proc, /dev and a writable
+# /tmp; a hand-rolled chroot needed each of those bolted on and the container
+# avoids the failure modes (resolv.conf symlink, root-owned /root, bind mounts).
+# Since the runner is arm64, the container runs natively: minutes, not the hours
+# the QEMU path took (it exceeded GitHub's 6-hour job limit).
 #
 # The upstream aarch64 asset cannot be used instead: it is linked against
 # Ubuntu's FFmpeg 6 (libavcodec.so.60) and ALARM ships FFmpeg 9 (.so.63), so
@@ -14,7 +16,8 @@ set -euo pipefail
 PKGNAME="mark-shot-arch-bin"
 UPSTREAM_REPO="jswysnemc/mark-shot"
 OUT_DIR="${GITHUB_WORKSPACE:-$(pwd)}/dist"
-ROOTDIR="$(pwd)/alarm-rootfs"
+WORK="$(pwd)/.arm-build"
+IMAGE_TAG="mark-shot-alarm-build:latest"
 ROOTFS_URL="http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz"
 
 # --------------------------------------------------------------------------- #
@@ -60,122 +63,165 @@ fi
 
 TAG="$MARK_SHOT_TAG"
 VERSION="${TAG#v}"
-echo "==> building ${PKGNAME} ${VERSION} for aarch64 (native ARM runner + ALARM chroot)"
+echo "==> building ${PKGNAME} ${VERSION} for aarch64 (native arm64 runner + ALARM container)"
+
+mkdir -p "$WORK" "$OUT_DIR"
 
 # --------------------------------------------------------------------------- #
-# Fetch and unpack the Arch Linux ARM rootfs
+# 1. Turn the ALARM rootfs into an arm64 container image
 # --------------------------------------------------------------------------- #
 # Must run as root: the tarball carries root-owned entries, setuid helpers and
 # capability xattrs that a non-root extraction cannot create.
-sudo mkdir -p "$ROOTDIR"
-curl -fsSL --retry 3 -o /tmp/alarm.tar.gz "$ROOTFS_URL"
-ls -la /tmp/alarm.tar.gz
-sudo tar --numeric-owner -xzf /tmp/alarm.tar.gz -C "$ROOTDIR" \
-    || { echo "::error::rootfs extraction failed" >&2; exit 1; }
-[ -x "$ROOTDIR/usr/bin/pacman" ] \
-    || { echo "::error::rootfs incomplete: pacman missing" >&2; exit 1; }
-echo "==> rootfs ready"
+if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+    echo "==> fetching Arch Linux ARM rootfs"
+    curl -fsSL --retry 3 -o "$WORK/alarm.tar.gz" "$ROOTFS_URL"
+    ls -la "$WORK/alarm.tar.gz"
+
+    sudo rm -rf "$WORK/rootfs"
+    sudo mkdir -p "$WORK/rootfs"
+    sudo tar --numeric-owner -xzf "$WORK/alarm.tar.gz" -C "$WORK/rootfs" \
+        || { echo "::error::rootfs extraction failed" >&2; exit 1; }
+    [ -x "$WORK/rootfs/usr/bin/pacman" ] \
+        || { echo "::error::rootfs incomplete: pacman missing" >&2; exit 1; }
+
+    # Write the tar as a file rather than piping: `sudo tar | docker import`
+    # needs root on one side and the runner user on the other, and the pipe
+    # silently yields nothing useful if either end lacks permission.
+    sudo tar --numeric-owner -C "$WORK/rootfs" -cf "$WORK/rootfs.tar" .
+    docker import -c 'CMD ["/bin/bash"]' "$WORK/rootfs.tar" "$IMAGE_TAG"
+    sudo rm -f "$WORK/rootfs.tar"
+    echo "==> image ready: $IMAGE_TAG"
+fi
 
 # --------------------------------------------------------------------------- #
-# Stage sources + inner build script, then chroot in
+# 2. Clone upstream at the tag
 # --------------------------------------------------------------------------- #
-rm -rf "$ROOTDIR/root/src" "$ROOTDIR/root/stage" "$ROOTDIR/out"
-sudo mkdir -p "$ROOTDIR/root/src" "$ROOTDIR/root/stage" "$ROOTDIR/out"
-sudo git clone --depth 1 --branch "$TAG" \
-    "https://github.com/${UPSTREAM_REPO}.git" "$ROOTDIR/root/src"
+echo "==> cloning upstream ${TAG}"
+rm -rf "$WORK/src"
+git clone --depth 1 --branch "$TAG" "https://github.com/${UPSTREAM_REPO}.git" "$WORK/src"
 
-# Values are baked in here; the inner script never needs them passed in.
-sudo tee "$ROOTDIR/root/inner.sh" >/dev/null <<INNER
+# --------------------------------------------------------------------------- #
+# 3. Build inside the ALARM container
+# --------------------------------------------------------------------------- #
+cat > "$WORK/in-container.sh" <<'INNER'
 set -euo pipefail
 export HOME=/root
 
-# pacman 7+ Landlock sandbox is unavailable on the runner kernel; same fix as
-# the x86_64 side.
+# Values injected by the caller (single-quoted heredoc: no shell expansion above).
+PKGNAME="${PKGNAME:?}"
+VERSION="${VERSION:?}"
+UPSTREAM_REPO="${UPSTREAM_REPO:?}"
+
+# pacman 7+ sandboxes downloads with Landlock and drops to the 'alpm' user.
+# GitHub's runner kernel has no Landlock, so every sync aborts with
+# "restricting filesystem access failed". Disable the sandbox for this
+# throwaway build container.
+#
+# DisableSandbox is an [options] directive. Appending it to the end of the file
+# puts it in whatever section is last (here [aur]), where pacman warns
+# "directive 'DisableSandbox' in section 'aur' not recognized" and ignores it,
+# so insert it directly after the [options] header instead. Plain awk: the ALARM
+# base rootfs has no python3 yet at this point.
 awk '
-  /^\[options\][[:space:]]*\$/ && !done { print; print "DisableSandbox"; done=1; next }
-  /^[[:space:]]*DisableSandbox[[:space:]]*\$/ { next }
+  /^\[options\][[:space:]]*$/ && !done { print; print "DisableSandbox"; done=1; next }
+  /^[[:space:]]*DisableSandbox[[:space:]]*$/ { next }
   { print }
 ' /etc/pacman.conf > /etc/pacman.conf.new && mv /etc/pacman.conf.new /etc/pacman.conf
 export PACMAN_DISABLE_SANDBOX=1
+
+# Belt and braces: some pacman builds try to drop to the 'alpm' user even with
+# the sandbox disabled. Create it so that path cannot abort the sync.
 id alpm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/bin/nologin alpm 2>/dev/null || true
 
 pacman-key --init
 pacman-key --populate archlinuxarm
+# Refresh the keyring first: a stale keyring makes -Syu fail on signature checks.
+pacman -Sy --noconfirm archlinuxarm-keyring || true
 pacman -Syu --noconfirm --needed \
-    base-devel cmake ninja pkgconf git curl \
+    base-devel cmake ninja pkgconf git libarchive zstd \
     pipewire ffmpeg qt6-base qt6-svg qt6-wayland layer-shell-qt rust
 
-cd /root/src
-cmake -S . -B build -G Ninja \
+# /src is mounted read-only so the checkout stays pristine; build out-of-tree in
+# a writable directory, otherwise cmake fails creating /src/build/CMakeFiles.
+cmake -S /src -B /build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
     -DMARK_SHOT_REQUIRE_FFMPEG=ON \
     -DMARK_SHOT_REQUIRE_LAYER_SHELL=ON
-cmake --build build --parallel
-cmake --install build --prefix /root/stage/usr
+cmake --build /build --parallel
+rm -rf /stage
+cmake --install /build --prefix /stage/usr
 
-mkdir -p /root/stage/usr/share/licenses/${PKGNAME}
-install -m644 /root/src/LICENSE /root/stage/usr/share/licenses/${PKGNAME}/LICENSE
-if [ -f /root/src/README.md ]; then
-    mkdir -p /root/stage/usr/share/doc/${PKGNAME}
-    install -m644 /root/src/README.md /root/stage/usr/share/doc/${PKGNAME}/README.md
+# Files upstream's install step does not place.
+mkdir -p /stage/usr/share/licenses/"$PKGNAME"
+[ -f /src/LICENSE ] && install -m644 /src/LICENSE /stage/usr/share/licenses/"$PKGNAME"/LICENSE || true
+if [ -f /src/README.md ]; then
+    mkdir -p /stage/usr/share/doc/"$PKGNAME"
+    install -m644 /src/README.md /stage/usr/share/doc/"$PKGNAME"/README.md
 fi
 
-# Soname-pinned FFmpeg deps, read from the binary actually produced.
-SONAMES=\$(ldd /root/stage/usr/bin/mark-shot 2>/dev/null | grep -oE 'lib(av|sw)[a-z]+\.so\.[0-9]+' | sort -u || true)
-echo "==> linked ffmpeg sonames: \${SONAMES:-none}"
+# The optional layer-shell plugin must be there: upstream's own aarch64 build
+# silently skipped it, and the package declares the runtime dependency.
+[ -f /stage/usr/lib/mark-shot/libmark-shot-layer-shell.so ] \
+    || { echo "::error::layer-shell plugin was not built" >&2; exit 1; }
+
+# Soname-pinned FFmpeg deps, derived from the binaries actually produced, so
+# pacman refuses the package on an FFmpeg generation mismatch instead of
+# letting it break at runtime. The main binary does not link FFmpeg itself --
+# the recording backend plugin does, so both have to be inspected.
+SONAMES=$( { ldd /stage/usr/bin/mark-shot
+             for so in /stage/usr/lib/mark-shot/recording/*.so; do ldd "$so"; done
+           } 2>/dev/null | grep -oE 'lib(av|sw)[a-z]+\.so\.[0-9]+' | sort -u || true)
+echo "==> linked ffmpeg sonames: ${SONAMES:-none}"
 
 {
-    echo "pkgname = ${PKGNAME}"
-    echo "pkgver = ${VERSION}-1"
+    echo "pkgname = $PKGNAME"
+    echo "pkgver = $VERSION-1"
     echo "pkgdesc = Qt 6 Wayland screenshot selection and annotation tool (built against Arch Linux ARM aarch64)"
-    echo "url = https://github.com/${UPSTREAM_REPO}"
-    echo "builddate = \$(date +%s)"
+    echo "url = https://github.com/$UPSTREAM_REPO"
+    echo "builddate = $(date +%s)"
     echo "packager = aur-release <noreply@github.com>"
-    echo "size = \$(du -sb /root/stage/usr | cut -f1)"
+    echo "size = $(du -sb /stage/usr | cut -f1)"
     echo "arch = aarch64"
     echo "license = MIT"
     for d in qt6-base qt6-svg qt6-wayland layer-shell-qt pipewire grim wl-clipboard hicolor-icon-theme python; do
-        echo "depend = \$d"
+        echo "depend = $d"
     done
     while IFS= read -r so; do
-        [ -n "\$so" ] || continue
+        [ -n "$so" ] || continue
         # "libavcodec.so.63" -> "libavcodec.so=63-64"
-        echo "depend = \${so%.so.*}.so=\${so##*.}-64"
-    done <<< "\$SONAMES"
+        echo "depend = ${so%.so.*}.so=${so##*.}-64"
+    done <<< "$SONAMES"
     echo "provides = mark-shot"
     echo "conflicts = mark-shot mark-shot-bin"
-} > /root/stage/.PKGINFO
+} > /stage/.PKGINFO
 
-bsdtar --zstd -C /root/stage -cf /out/${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst .PKGINFO usr
-chmod 666 /out/${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst
-echo "==> packaged ${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst"
+bsdtar --zstd -C /stage -cf "/out/${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst" .PKGINFO usr
+chmod 666 "/out/${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst"
+echo "==> packaged $PKGNAME-$VERSION-1-aarch64.pkg.tar.zst"
 INNER
 
-echo "==> building inside ALARM chroot (native arm64, minutes not hours)"
-for d in proc dev sys; do
-    sudo mount --bind "/$d" "$ROOTDIR/$d"
-done
-sudo cp /etc/resolv.conf "$ROOTDIR/etc/resolv.conf"
-
-# `|| RC=$?` keeps set -e from exiting before the bind mounts are undone.
-RC=0
-sudo chroot "$ROOTDIR" /bin/bash /root/inner.sh || RC=$?
-
-for d in sys dev proc; do
-    sudo umount "$ROOTDIR/$d" 2>/dev/null || true
-done
-[ "$RC" -eq 0 ] || exit "$RC"
+echo "==> building inside the ALARM container (native arm64)"
+docker run --rm \
+    -e PKGNAME="$PKGNAME" \
+    -e VERSION="$VERSION" \
+    -e UPSTREAM_REPO="$UPSTREAM_REPO" \
+    -v "$WORK/src:/src:ro" \
+    -v "$WORK/in-container.sh:/in-container.sh:ro" \
+    -v "$OUT_DIR:/out" \
+    --entrypoint /bin/bash \
+    "$IMAGE_TAG" /in-container.sh
 
 # --------------------------------------------------------------------------- #
-# Collect the finished package
+# 4. Verify and checksum the package
 # --------------------------------------------------------------------------- #
 ASSET="${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst"
-[ -f "$ROOTDIR/out/$ASSET" ] \
-    || { echo "::error::expected $ASSET was not produced" >&2; exit 1; }
-sudo cp "$ROOTDIR/out/$ASSET" "$OUT_DIR/"
-sudo chown "$(id -u):$(id -g)" "$OUT_DIR/$ASSET"
-sha256sum "$OUT_DIR/$ASSET" | sed "s| .*/| |" > "$OUT_DIR/$ASSET.sha256"
+if [ ! -f "$OUT_DIR/$ASSET" ]; then
+    echo "::error::expected package was not produced: $ASSET" >&2
+    ls -la "$OUT_DIR" >&2
+    exit 1
+fi
 
+sha256sum "$OUT_DIR/$ASSET" | sed "s| .*/| |" > "$OUT_DIR/$ASSET.sha256"
 echo "==> built $ASSET"
 ls -la "$OUT_DIR"

@@ -10,7 +10,9 @@ license=('MIT')
 # Runtime deps mirror the generated .PKGINFO. layer-shell-qt is required on both
 # arches: our builds compile the optional libmark-shot-layer-shell.so plugin
 # (upstream's own aarch64 asset was built without it, see jswysnemc/mark-shot#155).
-depends=('qt6-base' 'qt6-svg' 'qt6-wayland' 'layer-shell-qt' 'pipewire' 'grim' 'wl-clipboard' 'hicolor-icon-theme' 'python')
+# ffmpeg is needed by usr/lib/mark-shot/recording/libmark-shot-recording-libav.so;
+# the main binary does not link it directly.
+depends=('qt6-base' 'qt6-svg' 'qt6-wayland' 'layer-shell-qt' 'pipewire' 'ffmpeg' 'grim' 'wl-clipboard' 'hicolor-icon-theme' 'python')
 provides=('mark-shot')
 conflicts=('mark-shot' 'mark-shot-bin')
 options=('!strip' '!debug')
