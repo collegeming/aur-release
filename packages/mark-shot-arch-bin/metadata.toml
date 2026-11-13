@@ -19,14 +19,13 @@ owner = "jswysnemc"
 repo = "mark-shot"
 
 [build]
-# Compile from upstream source ourselves; build-package.yml does the work and
-# publishes the pacman packages to the release named below.
+# Compile from upstream source ourselves; .github/workflows/build.yaml does the
+# work and publishes the pacman packages to the release named below.
 #
 # `repo` must be PUBLIC: AUR users run makepkg anonymously, so a release asset
-# in a private repository cannot be downloaded. aur-release itself stays private
-# (it holds the publishing setup); only the binaries live in this public repo.
+# in a private repository cannot be downloaded. This repository is public.
 kind = "self"
-repo = "collegeming/aur-built-packages"
+repo = "collegeming/aur-release"
 release_tag = "aur-built-latest"
 arches = ["x86_64", "aarch64"]
 

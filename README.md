@@ -31,9 +31,8 @@
   > **自建预编译包**：上游的 aarch64 资产是在 Ubuntu 上编的（FFmpeg 6，`libavcodec.so.60`），
   > Arch Linux ARM 提供的是 FFmpeg 9（`.so.63`），pacman 直接拒绝安装；该资产还缺少
   > `libmark-shot-layer-shell.so`（构建机没装 LayerShellQt，可选插件被静默跳过）。所以本包
-  > 不用上游二进制，改由公开仓库
-  > [collegeming/aur-built-packages](https://github.com/collegeming/aur-built-packages)
-  > 在 Arch / Arch Linux ARM 里原生编译（aarch64 跑在原生 arm64 runner 上），本包只下载
+  > 不用上游二进制，改由本仓库的 `build` workflow 在 Arch / Arch Linux ARM 里原生编译
+  > （aarch64 跑在原生 arm64 runner 上），产物挂在 `aur-built-latest` release，本包只下载
   > 解包，用户端不需要任何构建工具链。
 
 ## 工作原理
@@ -41,9 +40,11 @@
 ```
 packages/<pkg>/
 ├── metadata.toml        # 上游仓库、tag 规则、各架构资产名模板
-└── PKGBUILD.template    # 带 {{pkgver}} / {{sha256_x86_64}} … 占位符的模板
+├── PKGBUILD.template    # 带 {{pkgver}} / {{sha256_x86_64}} … 占位符的模板
+└── build-<arch>.sh      # 仅自建包：在 Arch / ALARM 里编译（[build] kind = "self"）
 
-.github/workflows/aur-update.yaml   # cron 每 6 小时 + 手动触发
+.github/workflows/aur-update.yaml   # cron 每 6 小时 + 手动触发 → 推 AUR
+.github/workflows/build.yaml        # cron 每 6 小时 + 手动触发 → 编译自建包并发 release
 tools/update_package.py             # 检测 → 渲染 → 生成 SRCINFO → 推 AUR
 tools/known_hosts                   # aur.archlinux.org 的 SSH host key（防中间人）
 ```
@@ -60,10 +61,9 @@ workflow 每 6 小时跑一次：对 `packages/` 下每个目录
 3. 若上游更新：用模板渲染出新 PKGBUILD，用 `makepkg --printsrcinfo` 生成 `.SRCINFO`；
 4. `git clone` AUR 仓库 → 提交 → push（AUR 禁止 force-push，只会线性追加）。
 
-`[build] kind = "self"` 的包不由本仓库编译：产物在公开仓库
-[collegeming/aur-built-packages](https://github.com/collegeming/aur-built-packages) 里构建、
-挂到 `aur-built-latest` 滚动 release；本仓库只负责「等各架构产物齐全 → 渲染 PKGBUILD →
-推 AUR」。
+`[build] kind = "self"` 的包多一条构建链路：`build` workflow 在 Arch / Arch Linux ARM
+里编译，产物挂到本仓库的 `aur-built-latest` 滚动 release；`aur-update` 只负责「等各架构
+产物齐全 → 渲染 PKGBUILD → 推 AUR」，构建完成后会自动触发它，不用干等定时任务。
 
 上游 tag 格式、资产命名等差异都收敛在每包的 `metadata.toml` 里，换一个项目基本不用改脚本。
 
@@ -123,6 +123,9 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 
 - Actions 标签页 → **Update** workflow → **Run workflow**。
 - 在 `package` 输入框填 `siyuan-unlock-bin` 可只跑该包；留空跑全部。
+- 自建包（`[build] kind = "self"`）另有 **build** workflow：`package` 同上，`arch` 可只编
+  单个架构（留空 = 全部声明的架构）。只有全部架构的产物都发布成功，`aur-update` 才会
+  发版；构建成功会自动触发 `aur-update`。
 
 ## 新增一个包
 
@@ -155,7 +158,7 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 | `[assets.<arch>] names` | 同上，但给一组候选名（上游改过资产命名时用），按顺序取第一个命中的 |
 | `[extras.<key>] url` | 额外的源文件（如仓库里而非 release 资产里的 LICENSE）。每次运行都会重新下载并算校验和，所以上游改了文件会自动跟上，不会因为写死的校验和让用户构建失败。URL 里可用 `{{tag}}` / `{{tag_url}}` / `{{tag_ref}}` / `{pkgver}` |
 | `[build] kind` | `"self"` 表示产物由本项目编译，不用上游二进制。此时 `[assets.<arch>]` 匹配的是**本仓库产物**的文件名；`resolve` 先查 `[build] repo` 的滚动 release，产物不齐就返回 `pending_build`，AUR 不会抢先发布一个没有产物的版本 |
-| `[build] repo` / `[build] release_tag` | 存放自建产物的公开仓库与滚动 release 标签（如 `collegeming/aur-built-packages` + `aur-built-latest`）。仓库必须公开：用户端 `makepkg` 是匿名下载 |
+| `[build] repo` / `[build] release_tag` | 存放自建产物的仓库与滚动 release 标签（如 `collegeming/aur-release` + `aur-built-latest`）。仓库必须公开：用户端 `makepkg` 是匿名下载 |
 | `[build] arches` | 需要自建、且要等产物齐全的架构列表；列表里每个架构都有产物后才发布 |
 
 模板占位符：

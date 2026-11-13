@@ -17,15 +17,15 @@ provides=('mark-shot')
 conflicts=('mark-shot' 'mark-shot-bin')
 options=('!strip' '!debug')
 
-# The pacman packages below are built by this repository's build-package
-# workflow, which compiles upstream against Arch Linux (x86_64) and Arch Linux
-# ARM (aarch64). Installing them needs no build toolchain.
+# The pacman packages below are built by this repository's `build` workflow,
+# which compiles upstream against Arch Linux (x86_64) and Arch Linux ARM
+# (aarch64). Installing them needs no build toolchain.
 #
 # They are prebuilt packages, so there is nothing to compile here: unpacking the
 # .pkg.tar.zst's payload into $pkgdir is the whole install.
-source_x86_64=("mark-shot-arch-bin-${pkgver}-1-x86_64.pkg.tar.zst::https://github.com/collegeming/aur-built-packages/releases/download/aur-built-latest/{{asset_x86_64}}")
+source_x86_64=("mark-shot-arch-bin-${pkgver}-1-x86_64.pkg.tar.zst::https://github.com/collegeming/aur-release/releases/download/aur-built-latest/{{asset_x86_64}}")
 sha256sums_x86_64=('{{sha256_x86_64}}')
-source_aarch64=("mark-shot-arch-bin-${pkgver}-1-aarch64.pkg.tar.zst::https://github.com/collegeming/aur-built-packages/releases/download/aur-built-latest/{{asset_aarch64}}")
+source_aarch64=("mark-shot-arch-bin-${pkgver}-1-aarch64.pkg.tar.zst::https://github.com/collegeming/aur-release/releases/download/aur-built-latest/{{asset_aarch64}}")
 sha256sums_aarch64=('{{sha256_aarch64}}')
 
 package() {
