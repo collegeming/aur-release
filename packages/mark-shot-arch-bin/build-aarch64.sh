@@ -193,7 +193,11 @@ echo "==> linked ffmpeg sonames: ${SONAMES:-none}"
         echo "depend = ${so%.so.*}.so=${so##*.}-64"
     done <<< "$SONAMES"
     echo "provides = mark-shot"
-    echo "conflicts = mark-shot mark-shot-bin"
+    # pacman's .PKGINFO key is the singular "conflict" (makepkg emits one line
+    # per entry). "conflicts" is the PKGBUILD array name; in .PKGINFO pacman
+    # ignores it with "unknown key 'conflicts'".
+    echo "conflict = mark-shot"
+    echo "conflict = mark-shot-bin"
 } > /stage/.PKGINFO
 
 bsdtar --zstd -C /stage -cf "/out/${PKGNAME}-${VERSION}-1-aarch64.pkg.tar.zst" .PKGINFO usr
