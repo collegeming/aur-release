@@ -103,7 +103,10 @@ jobs:
             # filtered (`arch`) run always builds, since it exists to validate.
             if [ "$force" != "true" ] && [ -z "$only_arch" ]; then
               state=$(python3 tools/update_package.py check "packages/$name" 2>/dev/null) || state=""
-              pending=$(printf '%s' "$state" | jq -r '.pending_build // true' 2>/dev/null || echo true)
+              # NB: jq's `//` alternative operator treats false as empty, so
+              # `.pending_build // true` would always yield true. Ask for the
+              # field plainly and build when anything is off.
+              pending=$(printf '%s' "$state" | jq -r '.pending_build' 2>/dev/null) || pending=""
               if [ "$pending" = "false" ]; then
                 echo "$name: artifacts for the current upstream version already exist; skipping (set force=true to rebuild)"
                 continue
