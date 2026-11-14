@@ -34,6 +34,13 @@
   > 不用上游二进制，改由本仓库的 `build` workflow 在 Arch / Arch Linux ARM 里原生编译
   > （aarch64 跑在原生 arm64 runner 上），产物挂在 `aur-built-latest` release，本包只下载
   > 解包，用户端不需要任何构建工具链。
+- [`solomd-arch-bin`](packages/solomd-arch-bin/) — 源 [zhitongblog/solomd](https://github.com/zhitongblog/solomd)
+  （Tauri 2 Markdown 编辑器），`x86_64` + `aarch64`。
+
+  > AUR 上已有 `solomd-bin`，但它只声明 `arch=('x86_64')`（用 AppImage 包装），Arch Linux
+  > ARM 用户没有可装的东西。本包直接解包官方 `.deb`（上游同时提供 amd64 / arm64），双架构
+  > 覆盖、安装时无需构建。aarch64 二进制的 DT_NEEDED 全部由 ALARM 的 `webkit2gtk-4.1`、
+  > `libsoup3` 等提供，glibc 符号最高只要求 2.34。
 
 ## 工作原理
 

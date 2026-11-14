@@ -1,0 +1,35 @@
+# aur-release package manifest for solomd-arch-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+#
+# Upstream (zhitongblog/solomd) publishes Linux builds for both x86_64 and
+# aarch64 as .deb/.rpm/AppImage. The existing AUR package solomd-bin is
+# x86_64-only and wraps the AppImage, so Arch Linux ARM users have nothing to
+# install. This package repackages the official .deb for both arches.
+#
+# The aarch64 binary's DT_NEEDED list is satisfied by ALARM: webkit2gtk-4.1
+# provides libwebkit2gtk-4.1.so.0 / libjavascriptcoregtk-4.1.so.0, libsoup3
+# provides libsoup-3.0.so.0, and the highest required glibc symbol is
+# GLIBC_2.34 (ALARM ships a much newer glibc).
+
+pkgname = "solomd-arch-bin"
+
+maintainer = "colegeming <collegeming@outlook.com>"
+
+[upstream]
+owner = "zhitongblog"
+repo = "solomd"
+
+[tag]
+# v5.1.0 -> 5.1.0
+strip_prefix = "v"
+
+[assets.x86_64]
+names = ["SoloMD_{pkgver}_amd64.deb"]
+
+[assets.aarch64]
+names = ["SoloMD_{pkgver}_arm64.deb"]
+
+# The .deb does not carry the license text; take it from the release tag
+# (immutable) and let the updater hash it on every run.
+[extras.license]
+url = "https://raw.githubusercontent.com/zhitongblog/solomd/{{tag}}/LICENSE"
