@@ -34,6 +34,11 @@ on:
           - ""
           - x86_64
           - aarch64
+      force:
+        description: "Rebuild even if the current upstream version already has artifacts"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   # Upload the built packages to this repository's rolling release.
@@ -62,10 +67,14 @@ jobs:
 
       - id: plan
         shell: bash
+        env:
+          # The artifact-existence check below talks to the GitHub API.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           selected="${{ github.event.inputs.package }}"
           only_arch="${{ github.event.inputs.arch }}"
+          force="${{ github.event.inputs.force }}"
           x86="[]"
           arm="[]"
           pkgs="[]"
@@ -87,6 +96,19 @@ jobs:
           print(" ".join(re.findall(r'"([^"]+)"', m.group(1))) if m else "x86_64")
           PY
           )
+            # Skip versions whose artifacts already exist. Rebuilding them on
+            # every cron tick would replace the release assets (builds are not
+            # reproducible) and force a pointless pkgrel bump in the AUR package
+            # each time. `force=true` overrides this after a build-script fix; a
+            # filtered (`arch`) run always builds, since it exists to validate.
+            if [ "$force" != "true" ] && [ -z "$only_arch" ]; then
+              state=$(python3 tools/update_package.py check "packages/$name" 2>/dev/null) || state=""
+              pending=$(printf '%s' "$state" | jq -r '.pending_build // true' 2>/dev/null || echo true)
+              if [ "$pending" = "false" ]; then
+                echo "$name: artifacts for the current upstream version already exist; skipping (set force=true to rebuild)"
+                continue
+              fi
+            fi
             built=0
             for arch in $arches; do
               # The publish job verifies this list when building every arch, so

@@ -132,7 +132,9 @@ workflow 用 `StrictHostKeyChecking=yes` 严格校验，防止中间人；如果
 - 在 `package` 输入框填 `siyuan-unlock-bin` 可只跑该包；留空跑全部。
 - 自建包（`[build] kind = "self"`）另有 **build** workflow：`package` 同上，`arch` 可只编
   单个架构（留空 = 全部声明的架构）。只有全部架构的产物都发布成功，`aur-update` 才会
-  发版；构建成功会自动触发 `aur-update`。
+  发版；构建成功会自动触发 `aur-update`。定时触发时会先检查「当前上游版本的产物是否
+  已存在」，已存在就跳过——重建会改变校验和，进而让 AUR 的 pkgrel 无谓地一直往上顶。
+  改过构建脚本后要重建时，手动触发并勾选 `force`。
 
 ## 新增一个包
 

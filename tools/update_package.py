@@ -824,6 +824,44 @@ def do_resolve(pkg_dir: Path, token: str | None) -> int:
     return 0
 
 
+def do_check(pkg_dir: Path, token: str | None) -> int:
+    """Print whether the artifacts for the current upstream version already exist.
+
+    The build workflow runs on a cron. Without this gate it would rebuild the
+    same version every time, and since builds are not reproducible (build
+    timestamps end up in the package) every run changes the release assets and
+    forces another pkgrel bump in the AUR package. Rebuilding is only useful
+    when upstream moved to a version we have not built yet, or when someone
+    explicitly asks for it after changing the build scripts.
+    """
+    meta = load_manifest(pkg_dir)
+    if (meta.get("build") or {}).get("kind") != "self":
+        print(json.dumps({
+            "pkgname": meta["pkgname"],
+            "self": False,
+            "pending_build": False,
+        }))
+        return 0
+    try:
+        release = resolve_self_built_release(meta, token)
+    except UpdateError as exc:
+        # No artifacts release at all yet (404) -- definitely build.
+        print(json.dumps({
+            "pkgname": meta["pkgname"],
+            "pending_build": True,
+            "reason": str(exc),
+        }))
+        return 0
+    print(json.dumps({
+        "pkgname": meta["pkgname"],
+        "tag": release.get("tag_name"),
+        "pkgver": release.get("pkgver"),
+        "pending_build": bool(release.get("pending_build")),
+        "missing": release.get("missing", []),
+    }))
+    return 0
+
+
 def do_render(pkg_dir: Path, out_dir: Path, token: str | None, tag: str | None) -> None:
     meta = load_manifest(pkg_dir)
     template = read_template(pkg_dir)
@@ -1060,6 +1098,12 @@ def main() -> int:
     )
     p_resolve.add_argument("pkg_dir", type=Path)
 
+    p_check = sub.add_parser(
+        "check",
+        help="print whether this version's build artifacts already exist (for build CI)",
+    )
+    p_check.add_argument("pkg_dir", type=Path)
+
     args = parser.parse_args()
     token = (
         __import__("os").environ.get("GITHUB_TOKEN")
@@ -1071,6 +1115,8 @@ def main() -> int:
             do_render(args.pkg_dir.resolve(), args.out.resolve(), token, args.tag)
         elif args.cmd == "resolve":
             return do_resolve(args.pkg_dir.resolve(), token)
+        elif args.cmd == "check":
+            return do_check(args.pkg_dir.resolve(), token)
         else:
             return do_update(args.pkg_dir.resolve(), token, args.quiet)
         return 0
