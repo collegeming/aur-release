@@ -1,0 +1,29 @@
+# aur-release package manifest for genoffice-arch-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+#
+# Upstream ships Linux only for x86_64 (deb/rpm/AppImage, glibc 2.34+); there is
+# no Linux arm64 artifact -- the electron-builder config has a
+# GENOFFICE_LINUX_ARM64 switch, but upstream does not run it. The existing AUR
+# packages (genoffice-bin and genoffice-electron) both stopped at 0.12.x, so
+# this one tracks the latest release automatically by repackaging the official
+# .deb; the Electron payload is untouched, so installs need no build toolchain.
+
+pkgname = "genoffice-arch-bin"
+
+maintainer = "colegeming <collegeming@outlook.com>"
+
+[upstream]
+owner = "genspark-ai"
+repo = "genoffice"
+
+[tag]
+# v0.13.18 -> 0.13.18
+strip_prefix = "v"
+
+[assets.x86_64]
+names = ["genoffice_{pkgver}_amd64.deb"]
+
+# The .deb ships no license text; take it from the release tag (immutable) and
+# let the updater hash it on every run.
+[extras.license]
+url = "https://raw.githubusercontent.com/genspark-ai/genoffice/{{tag}}/LICENSE"
