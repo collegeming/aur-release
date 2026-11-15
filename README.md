@@ -25,14 +25,6 @@
   > AUR 上已有两个同上游的包：`dbx`（从源码构建，`makedepends` 需 rust/cargo/nodejs/pnpm，
   > 装一次要拉整套构建工具链）和 `dbx-bin`（**只有 x86_64**，由他人维护）。本包补的是
   > **aarch64**：直接解包官方 `.deb` 预编译产物，双架构都覆盖，安装时无需任何构建依赖。
-- [`mark-shot-arch-bin`](packages/mark-shot-arch-bin/) — 源 [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot)
-  （Rust 版截图/标注/录制工具），`x86_64` + `aarch64`。
-
-  > 0.1.x 时代上游的 aarch64 资产按 Ubuntu/FFmpeg 6 构建、且缺 layer-shell 插件
-  > （jswysnemc/mark-shot#155、#157），所以当时由本仓库自建。0.2.0 重写为 Rust 后，
-  > 上游**直接发布 Arch / ALARM 包**（`mark-shot-bin-<ver>-1-<arch>.pkg.tar.zst`），
-  > 本包改为解包上游产物，不再自建。AUR 上现在也有上游维护的 `mark-shot-bin` /
-  > `mark-shot`，本包已属冗余，后续可删除或停止维护。
 - [`solomd-arch-bin`](packages/solomd-arch-bin/) — 源 [zhitongblog/solomd](https://github.com/zhitongblog/solomd)
   （Tauri 2 Markdown 编辑器），`x86_64` + `aarch64`。
 

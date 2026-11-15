@@ -5,10 +5,14 @@ name: build
 # `aur-built-latest` release. The AUR package then only downloads and unpacks
 # them, so installing needs no build toolchain.
 #
-# Why mark-shot needs this: upstream's aarch64 asset is linked against Ubuntu's
-# FFmpeg 6 (libavcodec.so.60) and ships no layer-shell plugin, so it cannot be
-# installed on Arch Linux ARM (FFmpeg 9, .so.63). See jswysnemc/mark-shot#155
-# and #157.
+# Why self-building exists: some upstreams publish Linux binaries only for
+# x86_64, or link them against another distribution's ABI. genoffice currently
+# ships no Linux arm64 artifacts at all; its electron-builder config supports
+# them behind GENOFFICE_LINUX_ARM64=1, which the build script turns on.
+#
+# (mark-shot-arch-bin was built here for the same reason -- upstream's aarch64
+# asset was linked against Ubuntu's FFmpeg 6 -- until upstream started
+# publishing its own Arch/ALARM packages; that package has been removed.)
 #
 # x86_64 builds run inside an Arch container on x86_64 runners. aarch64 runs on
 # a NATIVE arm64 runner with an imported Arch Linux ARM rootfs container; the
