@@ -32,6 +32,13 @@
   > ARM 用户没有可装的东西。本包直接解包官方 `.deb`（上游同时提供 amd64 / arm64），双架构
   > 覆盖、安装时无需构建。aarch64 二进制的 DT_NEEDED 全部由 ALARM 的 `webkit2gtk-4.1`、
   > `libsoup3` 等提供，glibc 符号最高只要求 2.34。
+- [`openchamber-arch-bin`](packages/openchamber-arch-bin/) — 源 [openchamber/openchamber](https://github.com/openchamber/openchamber)
+  （OpenCode 的桌面端），`x86_64` + `aarch64`。
+
+  > 上游 Linux 同时发布 x86_64 和 arm64 的 deb/AppImage/rpm，但 AUR 现有的
+  > `openchamber-bin` 只声明 `x86_64`，ARM 用户装不上。本包解包官方 `.deb`
+  > （amd64 / arm64），双架构覆盖；同时把 sherpa-onnx 原生模块里指向构建机的
+  > RUNPATH 改成 `$ORIGIN`，并去掉 Debian 专用的更新器标记与 AppArmor profile。
 - [`genoffice-arch-bin`](packages/genoffice-arch-bin/) — 源 [genspark-ai/genoffice](https://github.com/genspark-ai/genoffice)
   （Electron 版 AI Office 套件：docs/sheets/slides/PDF/Markdown），`x86_64` + `aarch64`。
 

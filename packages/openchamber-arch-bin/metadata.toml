@@ -1,0 +1,31 @@
+# aur-release package manifest for openchamber-arch-bin.
+# Rendered together with PKGBUILD.template by tools/update_package.py.
+#
+# Upstream publishes Linux .deb/.AppImage/.rpm for BOTH x86_64 and arm64, but
+# the existing AUR package openchamber-bin declares arch=('x86_64') only, so
+# Arch Linux ARM users have nothing to install. This package repackages the
+# official .deb for both arches; the Electron payload is untouched and no build
+# toolchain is needed on the user side.
+
+pkgname = "openchamber-arch-bin"
+
+maintainer = "colegeming <collegeming@outlook.com>"
+
+[upstream]
+owner = "openchamber"
+repo = "openchamber"
+
+[tag]
+# v2.7.2 -> 2.7.2
+strip_prefix = "v"
+
+[assets.x86_64]
+names = ["OpenChamber-{pkgver}-linux-amd64.deb"]
+
+[assets.aarch64]
+names = ["OpenChamber-{pkgver}-linux-arm64.deb"]
+
+# The .deb ships no license text; take it from the release tag (immutable) and
+# let the updater hash it on every run.
+[extras.license]
+url = "https://raw.githubusercontent.com/openchamber/openchamber/{{tag}}/LICENSE"
