@@ -26,14 +26,13 @@
   > 装一次要拉整套构建工具链）和 `dbx-bin`（**只有 x86_64**，由他人维护）。本包补的是
   > **aarch64**：直接解包官方 `.deb` 预编译产物，双架构都覆盖，安装时无需任何构建依赖。
 - [`mark-shot-arch-bin`](packages/mark-shot-arch-bin/) — 源 [jswysnemc/mark-shot](https://github.com/jswysnemc/mark-shot)
-  （Qt 6 Wayland 截图/标注工具），`x86_64` + `aarch64`。
+  （Rust 版截图/标注/录制工具），`x86_64` + `aarch64`。
 
-  > **自建预编译包**：上游的 aarch64 资产是在 Ubuntu 上编的（FFmpeg 6，`libavcodec.so.60`），
-  > Arch Linux ARM 提供的是 FFmpeg 9（`.so.63`），pacman 直接拒绝安装；该资产还缺少
-  > `libmark-shot-layer-shell.so`（构建机没装 LayerShellQt，可选插件被静默跳过）。所以本包
-  > 不用上游二进制，改由本仓库的 `build` workflow 在 Arch / Arch Linux ARM 里原生编译
-  > （aarch64 跑在原生 arm64 runner 上），产物挂在 `aur-built-latest` release，本包只下载
-  > 解包，用户端不需要任何构建工具链。
+  > 0.1.x 时代上游的 aarch64 资产按 Ubuntu/FFmpeg 6 构建、且缺 layer-shell 插件
+  > （jswysnemc/mark-shot#155、#157），所以当时由本仓库自建。0.2.0 重写为 Rust 后，
+  > 上游**直接发布 Arch / ALARM 包**（`mark-shot-bin-<ver>-1-<arch>.pkg.tar.zst`），
+  > 本包改为解包上游产物，不再自建。AUR 上现在也有上游维护的 `mark-shot-bin` /
+  > `mark-shot`，本包已属冗余，后续可删除或停止维护。
 - [`solomd-arch-bin`](packages/solomd-arch-bin/) — 源 [zhitongblog/solomd](https://github.com/zhitongblog/solomd)
   （Tauri 2 Markdown 编辑器），`x86_64` + `aarch64`。
 

@@ -15,7 +15,9 @@ ARCH="x86_64"
 # The job bootstraps git/nodejs/python; npm and the Rust toolchain are ours.
 # electron-builder needs base-devel's make/gcc for any native npm module and
 # cargo for the xlsx-sidecar.
-pacman -S --noconfirm --needed npm rust base-devel
+# libxcrypt-compat: electron-builder's bundled fpm (ruby) needs libcrypt.so.1,
+# which Arch only provides through this compatibility package.
+pacman -S --noconfirm --needed npm rust base-devel libxcrypt-compat
 
 # --------------------------------------------------------------------------- #
 # Resolve the newest stable upstream tag
@@ -47,7 +49,7 @@ npm run build:all
 cd apps/shell
 # -c.extraMetadata.version makes the packaged app report the release version
 # instead of the workspace version pinned in package.json.
-npx electron-builder --linux deb --publish never \
+npx electron-builder --linux deb \
     -c.extraMetadata.version="$VERSION"
 
 DEB=$(find "$WORK/src/apps/shell/release" -maxdepth 1 -name 'genoffice_*_amd64.deb' | head -1)

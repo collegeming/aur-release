@@ -1,14 +1,17 @@
 # aur-release package manifest for mark-shot-arch-bin.
 # Rendered together with PKGBUILD.template by tools/update_package.py.
 #
-# This package does NOT forward upstream's prebuilt artifacts. Upstream's own
-# aarch64 asset links against Ubuntu's FFmpeg 6 (libavcodec.so.60), which cannot
-# be installed on Arch Linux ARM where FFmpeg 9 provides .so.63 -- so it fails
-# at the pacman dependency check. Its x86_64 asset is built on Arch and works,
-# but we build both arches here so the two are consistent and both are linked
-# against the target system's own FFmpeg.
+# History: 0.1.x was built by us from source because upstream's aarch64 asset
+# was linked against Ubuntu's FFmpeg 6 and shipped without the layer-shell
+# plugin (jswysnemc/mark-shot#155, #157). The 0.2.x Rust rewrite sizes that
+# differently: upstream now publishes real Arch/ALARM packages
+# (mark-shot-bin-<ver>-1-<arch>.pkg.tar.zst) whose dependencies are plain
+# system libraries. So this package is now a thin repackage of those binaries;
+# no build step is involved.
 #
-# See https://github.com/jswysnemc/mark-shot/issues/155
+# Note: AUR also carries first-party mark-shot-bin / mark-shot 0.2.x packages,
+# so this package is effectively redundant -- it keeps working for existing
+# users until it is deleted or disowned.
 
 pkgname = "mark-shot-arch-bin"
 
@@ -18,24 +21,12 @@ maintainer = "colegeming <collegeming@outlook.com>"
 owner = "jswysnemc"
 repo = "mark-shot"
 
-[build]
-# Compile from upstream source ourselves; .github/workflows/build.yaml does the
-# work and publishes the pacman packages to the release named below.
-#
-# `repo` must be PUBLIC: AUR users run makepkg anonymously, so a release asset
-# in a private repository cannot be downloaded. This repository is public.
-kind = "self"
-repo = "collegeming/aur-release"
-release_tag = "aur-built-latest"
-arches = ["x86_64", "aarch64"]
-
 [tag]
-# v0.1.62 -> 0.1.62
+# v0.2.0 -> 0.2.0
 strip_prefix = "v"
 
-# Artifacts are produced by our build scripts with this naming scheme.
 [assets.x86_64]
-names = ["mark-shot-arch-bin-{pkgver}-1-x86_64.pkg.tar.zst"]
+names = ["mark-shot-bin-{pkgver}-1-x86_64.pkg.tar.zst"]
 
 [assets.aarch64]
-names = ["mark-shot-arch-bin-{pkgver}-1-aarch64.pkg.tar.zst"]
+names = ["mark-shot-bin-{pkgver}-1-aarch64.pkg.tar.zst"]

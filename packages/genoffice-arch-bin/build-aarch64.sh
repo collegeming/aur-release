@@ -51,7 +51,7 @@ npm run build:all
 cd apps/shell
 # -c.extraMetadata.version makes the packaged app report the release version
 # instead of the workspace version pinned in package.json.
-GENOFFICE_LINUX_ARM64=1 npx electron-builder --linux deb --publish never \
+GENOFFICE_LINUX_ARM64=1 npx electron-builder --linux deb \
     -c.extraMetadata.version="$VERSION"
 
 DEB=$(find "$WORK/src/apps/shell/release" -maxdepth 1 -name 'genoffice_*_arm64.deb' | head -1)
