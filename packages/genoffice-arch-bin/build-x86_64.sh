@@ -49,7 +49,11 @@ npm run build:all
 cd apps/shell
 # -c.extraMetadata.version makes the packaged app report the release version
 # instead of the workspace version pinned in package.json.
-npx electron-builder --linux deb \
+# GITHUB_TOKEN is exported by the workflow for the version lookup; electron-builder
+# treats any GH token in the environment as "publish to GitHub" and then fails
+# because the clone has no matching repository metadata. Drop the tokens for this
+# command so it only builds.
+env -u GITHUB_TOKEN -u GH_TOKEN npx electron-builder --linux deb \
     -c.extraMetadata.version="$VERSION"
 
 DEB=$(find "$WORK/src/apps/shell/release" -maxdepth 1 -name 'genoffice_*_amd64.deb' | head -1)
