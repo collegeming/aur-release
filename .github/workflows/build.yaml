@@ -195,6 +195,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 22 for npm-based builds (genoffice); other packages ignore it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Build
         shell: bash
         env:

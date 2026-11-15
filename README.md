@@ -42,12 +42,14 @@
   > 覆盖、安装时无需构建。aarch64 二进制的 DT_NEEDED 全部由 ALARM 的 `webkit2gtk-4.1`、
   > `libsoup3` 等提供，glibc 符号最高只要求 2.34。
 - [`genoffice-arch-bin`](packages/genoffice-arch-bin/) — 源 [genspark-ai/genoffice](https://github.com/genspark-ai/genoffice)
-  （Electron 版 AI Office 套件：docs/sheets/slides/PDF/Markdown），`x86_64`。
+  （Electron 版 AI Office 套件：docs/sheets/slides/PDF/Markdown），`x86_64` + `aarch64`。
 
-  > 上游 Linux 只发 x86_64（deb/rpm/AppImage，glibc 2.34+），没有 Linux arm64 产物。
-  > AUR 上已有的 `genoffice-bin` 和 `genoffice-electron` 都停在 0.12.x，本包直接解包
-  > 官方 `.deb`，自动跟最新 release，安装时无需构建。应用内更新器按 deb 打包，在 Arch
-  > 上不可用，升级请走 `pacman -Syu`。
+  > 上游 Linux 只发布 x86_64（deb/rpm/AppImage，glibc 2.34+），但它的 electron-builder
+  > 配置支持 `GENOFFICE_LINUX_ARM64=1`，只是发布流水线没跑。因此本包**自建双架构**：
+  > 在 Arch 容器里编 x86_64、在原生 arm64 runner 上编 aarch64（Node + Vite 构建、
+  > cargo 编 xlsx-sidecar），产物挂到 `aur-built-latest`。AUR 上原有的 `genoffice-bin`
+  > 和 `genoffice-electron` 都停在 0.12.x。应用内更新器在 Arch 上不可用，升级走
+  > `pacman -Syu`。
 
 ## 工作原理
 

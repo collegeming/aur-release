@@ -1,12 +1,16 @@
 # aur-release package manifest for genoffice-arch-bin.
 # Rendered together with PKGBUILD.template by tools/update_package.py.
 #
-# Upstream ships Linux only for x86_64 (deb/rpm/AppImage, glibc 2.34+); there is
-# no Linux arm64 artifact -- the electron-builder config has a
-# GENOFFICE_LINUX_ARM64 switch, but upstream does not run it. The existing AUR
-# packages (genoffice-bin and genoffice-electron) both stopped at 0.12.x, so
-# this one tracks the latest release automatically by repackaging the official
-# .deb; the Electron payload is untouched, so installs need no build toolchain.
+# Upstream ships Linux artifacts only for x86_64 (deb/rpm/AppImage). Its
+# electron-builder config supports arm64 behind GENOFFICE_LINUX_ARM64=1 but the
+# release pipeline never runs it, so Arch Linux ARM users have nothing to
+# install. Building both arches here keeps the two packages identical and lets
+# the aarch64 package exist at all; the build itself is ordinary Node + cargo
+# (the xlsx-sidecar) and was verified end to end on a native arm64 runner.
+#
+# The build scripts are packages/genoffice-arch-bin/build-<arch>.sh; the
+# resulting pacman packages are attached to this repository's
+# `aur-built-latest` release.
 
 pkgname = "genoffice-arch-bin"
 
@@ -16,14 +20,19 @@ maintainer = "colegeming <collegeming@outlook.com>"
 owner = "genspark-ai"
 repo = "genoffice"
 
+[build]
+kind = "self"
+repo = "collegeming/aur-release"
+release_tag = "aur-built-latest"
+arches = ["x86_64", "aarch64"]
+
 [tag]
 # v0.13.18 -> 0.13.18
 strip_prefix = "v"
 
+# Artifact names produced by our build scripts.
 [assets.x86_64]
-names = ["genoffice_{pkgver}_amd64.deb"]
+names = ["genoffice-arch-bin-{pkgver}-1-x86_64.pkg.tar.zst"]
 
-# The .deb ships no license text; take it from the release tag (immutable) and
-# let the updater hash it on every run.
-[extras.license]
-url = "https://raw.githubusercontent.com/genspark-ai/genoffice/{{tag}}/LICENSE"
+[assets.aarch64]
+names = ["genoffice-arch-bin-{pkgver}-1-aarch64.pkg.tar.zst"]
