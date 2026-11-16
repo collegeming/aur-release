@@ -53,12 +53,19 @@ jobs:
             echo "--- pacman.conf: $(grep -E "^Architecture" /etc/pacman.conf || echo auto)"
             id -u builder >/dev/null 2>&1 || useradd -m builder
             chown -R builder /work/aur
-            su builder -c "cd /work/aur && makepkg --noconfirm --nodeps --noprogressbar" 2>&1 | tail -20
-            echo "--- built package .PKGINFO:"
-            bsdtar -xOf /work/aur/genoffice-arch-bin-*.pkg.tar.zst .PKGINFO | grep -E "^(pkgver|arch)"
-            echo "--- payload ELF:"
-            bsdtar -xOf /work/aur/genoffice-arch-bin-*.pkg.tar.zst opt/GenOffice/genoffice 2>/dev/null | head -c 20 | od -An -tx1 || true
+            su builder -c "cd /work/aur && makepkg --noconfirm --nodeps --noprogressbar"
+            echo "--- files in the build dir:"
+            ls -la /work/aur/*.pkg.tar.zst
+            # Select the package makepkg built (pkgrel 2), not the raw upstream
+            # artifact (pkgrel 1) that also sits in the build directory: pacman
+            # silently drops the second target for a duplicate pkgname.
+            BUILT=$(ls /work/aur/genoffice-arch-bin-*-2-aarch64.pkg.tar.zst)
+            echo "--- built package: $BUILT"
+            bsdtar -xOf "$BUILT" .PKGINFO | grep -E "^(pkgver|arch)"
+            echo "--- payload ELF header (e_machine b7 00 = AArch64):"
+            bsdtar -xOf "$BUILT" opt/GenOffice/genoffice | head -c 20 | od -An -tx1 || true
             echo "--- pacman install test:"
-            pacman -U --noconfirm --nodeps /work/aur/genoffice-arch-bin-*.pkg.tar.zst
+            pacman -U --noconfirm --nodeps "$BUILT"
             pacman -Qi genoffice-arch-bin | grep -E "Version|Architecture"
-          ' 2>&1 | tail -60
+            echo "--- done"
+          '
