@@ -16,10 +16,11 @@
   （分别占 `/usr/bin/kimi-code` 与 `/usr/bin/kimi`）。上游没有公开仓库、也不发 GitHub
   release，只有官网安装包，所以走的是它自带更新器的 feed（见下文 `kind`）。
 
-  > 厂商只发 Linux x86_64。aarch64 包由本仓库自建：取官方 x86_64 `.deb` 里的应用载荷
-  > （app.asar 与资源都是架构无关的），换上**官方 Electron arm64 运行时**，再把唯一的原生
-  > 模块 `node-pty` 按 Electron ABI 重编（思路参照
-  > `macOS-Terminal/deepseek-harness-desktop-linux` 对 macOS 载荷的处理）。
+  > 厂商只发 Linux x86_64：**x86_64 直接用厂商的 `.deb`**（和以前一样，不重新打包）；
+  > aarch64 由本仓库自建——取官方 x86_64 `.deb` 里的应用载荷（app.asar 与资源都是架构
+  > 无关的），换上**官方 Electron arm64 运行时**，再把唯一的原生模块 `node-pty` 按
+  > Electron ABI 重编（思路参照 `macOS-Terminal/deepseek-harness-desktop-linux` 对
+  > macOS 载荷的处理）。
 
   > 桌面端的**内置更新器在 Arch 上不工作**：它按发行版包来区分（`resources/package-type`
   > 是 `deb`），升级时会去调 `dpkg`。装了本包之后请一律用 `pacman -Syu` 升级，应用里若

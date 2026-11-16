@@ -14,25 +14,28 @@ maintainer = "colegeming <collegeming@outlook.com>"
 # auto-updater reads, named in the app's resources/app-update.yml:
 #   provider: generic, url: https://code.kimi.com/kimi-code/desktop/
 kind = "electron-updater"
-feed = "https://code.kimi.com/kimi-code/desktop/latest-linux.yml"
+# Temporary pin while upstream's feed still points below the published AUR
+# version (vendor rolled 1.3.5 back to 1.3.3 after we had already published
+# 1.3.5-1, and AUR cannot downgrade). Restored to the real feed below once
+# 1.3.5-2 is out; see _feeds/kimi-1.3.5.yml.
+feed = "https://raw.githubusercontent.com/collegeming/aur-release/main/_feeds/kimi-1.3.5.yml"
+# feed = "https://code.kimi.com/kimi-code/desktop/latest-linux.yml"
 
 [build]
-# Linux desktop builds are x86_64 only: the feed has no arm64 entry and the
-# vendor ships no Linux arm64 artifact anywhere. We build both ourselves:
-#   x86_64 -- repack the vendor .deb unchanged;
-#   aarch64 -- same app payload, with the official Electron arm64 runtime
-#              swapped in and node-pty rebuilt for that ABI (the approach
-#              macOS-Terminal/deepseek-harness-desktop-linux uses for its
-#              macOS payload).
-# Scripts: packages/kimi-code-desktop-bin/build-<arch>.sh.
+# The vendor ships Linux only for x86_64. We forward that .deb unchanged and
+# build the missing aarch64 package ourselves: same app payload with the
+# official Electron arm64 runtime swapped in and node-pty rebuilt for that ABI
+# (the approach macOS-Terminal/deepseek-harness-desktop-linux uses for its
+# macOS payload). Script: packages/kimi-code-desktop-bin/build-aarch64.sh.
 kind = "self"
 repo = "collegeming/aur-release"
 release_tag = "aur-built-latest"
-arches = ["x86_64", "aarch64"]
+arches = ["aarch64"]
 
-# Artifact names produced by our build scripts.
+# x86_64: the vendor installer, straight from the update feed.
 [assets.x86_64]
-names = ["kimi-code-desktop-bin-{pkgver}-1-x86_64.pkg.tar.zst"]
+names = ["KimiCode-{pkgver}-linux-amd64.deb"]
 
+# aarch64: our build artifact.
 [assets.aarch64]
 names = ["kimi-code-desktop-bin-{pkgver}-1-aarch64.pkg.tar.zst"]

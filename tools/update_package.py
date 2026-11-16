@@ -142,7 +142,8 @@ def parse_update_feed(text: str) -> dict:
     return {"version": version, "files": files}
 
 
-def resolve_feed_release(meta: dict, token: str | None) -> dict:
+def resolve_feed_release(meta: dict, token: str | None,
+                         validate: bool = True) -> dict:
     """Turn an electron-builder feed into the release dict the rest expects.
 
     Some upstreams publish no GitHub release at all: Kimi Code Desktop only
@@ -151,6 +152,10 @@ def resolve_feed_release(meta: dict, token: str | None) -> dict:
     the app's `resources/app-update.yml`). The feed carries the version plus a
     base64 checksum per artifact and version-stamped URLs, so one tiny request
     replaces downloading a 110 MB installer just to see what version it is.
+
+    `validate=False` skips the per-arch asset check: a self-built package whose
+    feed only covers some arches (the others come from our own build) must not
+    be rejected for the arches it builds itself.
     """
     feed = meta["upstream"].get("feed")
     if not feed:
@@ -175,20 +180,21 @@ def resolve_feed_release(meta: dict, token: str | None) -> dict:
             "digest": digest,
         })
 
-    found = {a["name"] for a in assets}
-    unresolved = [
-        arch
-        for arch, spec in (meta.get("assets") or {}).items()
-        if not any(name in found for name in asset_candidates(spec, version))
-    ]
-    if unresolved:
-        # A feed always describes exactly one release, so a configured asset
-        # being absent means upstream renamed or dropped it -- a hard breakage,
-        # not "the release is not out yet".
-        raise UpdateError(
-            f"feed {feed} has no asset for {', '.join(unresolved)}; "
-            f"it lists {sorted(found)}"
-        )
+    if validate:
+        found = {a["name"] for a in assets}
+        unresolved = [
+            arch
+            for arch, spec in (meta.get("assets") or {}).items()
+            if not any(name in found for name in asset_candidates(spec, version))
+        ]
+        if unresolved:
+            # A feed always describes exactly one release, so a configured asset
+            # being absent means upstream renamed or dropped it -- a hard breakage,
+            # not "the release is not out yet".
+            raise UpdateError(
+                f"feed {feed} has no asset for {', '.join(unresolved)}; "
+                f"it lists {sorted(found)}"
+            )
     return {
         "tag_name": version,
         "draft": False,
@@ -234,11 +240,18 @@ def resolve_self_built_release(meta: dict, token: str | None) -> dict | None:
 
     # The build lags upstream: it only produces artifacts once its own workflow
     # finishes. Publishing a version whose artifacts are not there yet would
-    # break AUR users with a 404, so require every configured arch to already
+    # break AUR users with a 404, so require every self-built arch to already
     # carry the expected asset for THIS version.
-    wanted = []
-    for arch, spec in (meta.get("assets") or {}).items():
-        wanted += asset_candidates(spec, pkgver)
+    #
+    # Arches that are NOT in [build] arches come from upstream (e.g. a vendor
+    # feed that ships x86_64 only, while we add aarch64), so they must not be
+    # required in our release.
+    build_arches = list(build.get("arches") or (meta.get("assets") or {}).keys())
+    wanted: list[str] = []
+    for arch in build_arches:
+        spec = (meta.get("assets") or {}).get(arch)
+        if spec:
+            wanted += asset_candidates(spec, pkgver)
     available = {a["name"] for a in assets}
     missing = [n for n in wanted if n not in available]
     if missing:
@@ -251,9 +264,18 @@ def resolve_self_built_release(meta: dict, token: str | None) -> dict | None:
             "missing": missing,
         }
 
+    # Mix upstream assets with ours so one template can reference both: the
+    # vendor installer for the arches we forward, our package for the arches we
+    # build. Asset names do not collide, so resolve_assets picks the right one.
+    merged = list(assets)
+    upstream = meta.get("upstream") or {}
+    if upstream.get("kind") == "electron-updater":
+        feed_release = resolve_feed_release(meta, token, validate=False)
+        merged = feed_release.get("assets", []) + merged
+
     return {
         "tag_name": upstream_tag,
-        "assets": assets,
+        "assets": merged,
         "self_built": True,
         "pkgver": pkgver,
     }
@@ -698,12 +720,25 @@ def srcinfo_python_fallback(pkgbuild_text: str, algo: str = "sha256") -> str:
         if values is not None:
             fields[key] = values
 
-    sums_name = f"{algo}sums"
+    def _sums_for(arch: str) -> tuple[str, list[str] | None]:
+        # Mixed-source packages legitimately carry a different algorithm per
+        # arch: a forwarded vendor feed asset is sha512 while our own build
+        # artifact is sha256.
+        for a in ("sha256", "sha512"):
+            vals = _bash_arr(f"{a}sums_{arch}", pkgbuild_text)
+            if vals is not None:
+                return f"{a}sums", vals
+        if arch == "x86_64":
+            for a in ("sha256", "sha512"):
+                vals = _bash_arr(f"{a}sums", pkgbuild_text)
+                if vals is not None:
+                    return f"{a}sums", vals
+        return f"{algo}sums", None
+
     src_fields = _bash_arr("source_x86_64", pkgbuild_text, fallback_name="source")
-    sums_x86 = _bash_arr(f"{sums_name}_x86_64", pkgbuild_text,
-                         fallback_name=sums_name)
+    sums_x86_name, sums_x86 = _sums_for("x86_64")
     src_arm = _bash_arr("source_aarch64", pkgbuild_text)
-    sums_arm = _bash_arr(f"{sums_name}_aarch64", pkgbuild_text)
+    sums_arm_name, sums_arm = _sums_for("aarch64")
 
     # makepkg --printsrcinfo expands ${pkgver} in source/checksum/noextract
     # lines; the pure-Python fallback must do the same so bootstrap output
@@ -742,9 +777,9 @@ def srcinfo_python_fallback(pkgbuild_text: str, algo: str = "sha256") -> str:
 
     for label, vals in (
         ("source_x86_64", src_fields),
-        (f"{sums_name}_x86_64", sums_x86),
+        (f"{sums_x86_name}_x86_64", sums_x86),
         ("source_aarch64", src_arm),
-        (f"{sums_name}_aarch64", sums_arm),
+        (f"{sums_arm_name}_aarch64", sums_arm),
     ):
         if vals:
             for v in vals:
@@ -795,9 +830,14 @@ def resolve_assets(meta: dict, release: dict, pkgver: str,
 
     Returns template context entries: `asset_<arch>` (the asset's real
     filename, so templates stop hardcoding it), `url_asset_<arch>` (its
-    download URL) and `<algo>_<arch>` (its checksum, with `<algo>` chosen by
-    `[checksum] algorithm`). The checksum comes from the source's precomputed
-    digest when present, so no multi-hundred-MB download is needed.
+    download URL) and `<algo>_<arch>` (its checksum). The checksum comes from
+    the source's precomputed digest when present, so no multi-hundred-MB
+    download is needed.
+
+    The digest's own algorithm wins over `[checksum] algorithm`: a mixed-source
+    package (vendor .deb forwarded for one arch, our built package for another)
+    legitimately carries sha512 for one and sha256 for the other, and each
+    arch's PKGBUILD array names its own algorithm.
     """
     algo = checksum_algorithm(meta)
     by_name = {a["name"]: a for a in release.get("assets", [])}
@@ -815,10 +855,13 @@ def resolve_assets(meta: dict, release: dict, pkgver: str,
         asset = by_name[matched]
         out[f"asset_{arch}"] = matched
         out[f"url_asset_{arch}"] = asset["browser_download_url"]
-        out[f"{algo}_{arch}"] = (
-            asset_digest(asset, algo)
-            or digest_of_url(asset["browser_download_url"], token, algo)
-        )
+        d_algo, _, d_hex = (asset.get("digest") or "").partition(":")
+        if d_algo in ("sha256", "sha512") and d_hex:
+            out[f"{d_algo}_{arch}"] = d_hex
+        else:
+            out[f"{algo}_{arch}"] = digest_of_url(
+                asset["browser_download_url"], token, algo
+            )
     return out
 
 

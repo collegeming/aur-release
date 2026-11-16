@@ -1,0 +1,14 @@
+# Temporary feed pin for kimi-code-desktop-bin 1.3.5.
+#
+# The vendor published 1.3.5 on 2026-11-13 06:46 and then rewrote all three
+# feeds back to 1.3.3 at 18:37 the same day. Our AUR package had already been
+# updated to 1.3.5-1 in that window and AUR does not downgrade, so to ship the
+# aarch64 build at the same version we resolve 1.3.5 from this pinned copy of
+# the feed (the .deb itself is still served by the vendor CDN).
+#
+# This file is removed again once 1.3.5-2 is published.
+version: 1.3.5
+files:
+  - url: https://code.kimi.com/kimi-code/desktop/binaries/1.3.5/KimiCode-1.3.5-linux-amd64.deb
+    sha512: ubl/mgRX3n74ctTm9UPmy51k8j3cHqAqJQL2T/2Juq3QP7if8xu22wKGMZv47t3o8p980wFORGWKsbtJHiG42g==
+    size: 0
