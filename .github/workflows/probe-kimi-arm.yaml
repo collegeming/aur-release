@@ -1,0 +1,83 @@
+name: probe-kimi-arm
+
+# Temporary probe: can Kimi Code Desktop's Linux x64 payload be turned into a
+# working Linux arm64 tree by swapping in the official Electron arm64 runtime
+# and rebuilding node-pty against it?
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/share/dotnet /usr/local/lib/android 2>/dev/null || true
+          df -h /
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libarchive-tools build-essential python3 unzip
+          node -v; python3 --version; gcc --version | head -1
+
+      - name: Fetch vendor Linux x64 deb
+        run: |
+          mkdir -p work && cd work
+          curl -fsSL --retry 3 -o kimi.deb \
+            "https://cdn.kimi.com/kimi-code/desktop/binaries/1.3.3/KimiCode-1.3.3-linux-amd64.deb"
+          mkdir -p deb && bsdtar -xf kimi.deb -C deb
+          mkdir -p vendor && bsdtar -xf deb/data.tar.* -C vendor
+          ls "vendor/opt/Kimi Code" | head
+
+      - name: Determine Electron version and fetch arm64 runtime
+        run: |
+          cd work
+          VER=$(grep -a -o 'Electron/[0-9][0-9.]*' "vendor/opt/Kimi Code/kimi-code" | head -1 | cut -d/ -f2)
+          echo "electron=$VER"
+          [ -n "$VER" ] || { echo "::error::could not read Electron version"; exit 1; }
+          curl -fsSL --retry 3 -o electron.zip \
+            "https://github.com/electron/electron/releases/download/v${VER}/electron-v${VER}-linux-arm64.zip"
+          mkdir -p electron && unzip -q electron.zip -d electron
+          ls electron | head
+
+      - name: Assemble arm64 tree
+        run: |
+          cd work
+          cp -a "vendor/opt/Kimi Code" tree
+          cp -a electron/. tree/
+          mv tree/electron tree/kimi-code
+          chmod 0755 tree/kimi-code
+          file tree/kimi-code | head -1
+
+      - name: Rebuild node-pty for Electron arm64
+        run: |
+          VER=$(grep -a -o 'Electron/[0-9][0-9.]*' "$GITHUB_WORKSPACE/work/tree/kimi-code" | head -1 | cut -d/ -f2)
+          cd "$GITHUB_WORKSPACE/work/tree/resources/app.asar.unpacked/node_modules/node-pty"
+          npm install --ignore-scripts --no-audit --no-fund
+          npx --yes node-gyp rebuild --arch=arm64 --target="$VER" \
+            --dist-url=https://electronjs.org/headers
+          file build/Release/pty.node
+
+      - name: Smoke test the runtime
+        run: |
+          cd work
+          export ELECTRON_RUN_AS_NODE=1
+          ./tree/kimi-code -e 'console.log("electron", process.versions.electron, "arch", process.arch, "node", process.versions.node)'
+          ./tree/kimi-code -e '
+            const pty = require("./tree/resources/app.asar.unpacked/node_modules/node-pty");
+            const p = pty.spawn("/bin/sh", ["-c", "printf pty-ok"], { cols: 80, rows: 24 });
+            let out = "";
+            p.onData(d => out += d);
+            p.onExit(() => { console.log("pty-output:", JSON.stringify(out)); process.exit(0); });
+            setTimeout(() => { console.log("timeout", JSON.stringify(out)); process.exit(1); }, 5000);
+          '
+
+      - name: Summary
+        if: always()
+        run: du -sh "$GITHUB_WORKSPACE/work/tree" 2>/dev/null; df -h /
