@@ -1,0 +1,64 @@
+name: probe-aur-genoffice
+
+# Temporary probe: does the PUBLISHED AUR package build and install cleanly on
+# aarch64? Runs makepkg inside Arch Linux ARM on a native arm64 runner, using
+# the real AUR git repo, then installs the result with pacman to see whether
+# the architecture check passes. Deleted after the diagnostic.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/share/dotnet /usr/local/lib/android 2>/dev/null || true
+          df -h /
+
+      - name: Fetch the AUR package as users get it
+        run: |
+          git clone --depth 1 https://aur.archlinux.org/genoffice-arch-bin.git aur
+          grep -nE '^\s*(arch|pkgver|pkgrel)=' aur/PKGBUILD
+          grep -E '^\s*arch =' aur/.SRCINFO
+
+      - name: Import the Arch Linux ARM rootfs
+        run: |
+          curl -fsSL --retry 3 -o rootfs.tar.gz http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+          docker import rootfs.tar.gz alarm
+          docker run --rm alarm uname -m
+
+      - name: Build and install with makepkg + pacman inside ALARM
+        run: |
+          set -o pipefail
+          docker run --rm -v "$PWD:/work" -w /work alarm bash -lc '
+            set -euo pipefail
+            # pacman 7 on aarch64 needs Landlock off inside hosted containers.
+            if grep -q "^\[options\]" /etc/pacman.conf && ! grep -q "^DisableSandbox" /etc/pacman.conf; then
+              awk '"'"'
+                /^\[options\][[:space:]]*$/ && !done { print; print "DisableSandbox"; done=1; next }
+                /^[[:space:]]*DisableSandbox[[:space:]]*$/ { next }
+                { print }
+              '"'"' /etc/pacman.conf > /etc/pacman.conf.new && mv /etc/pacman.conf.new /etc/pacman.conf
+            fi
+            pacman-key --init >/dev/null 2>&1 || true
+            pacman-key --populate archlinuxarm >/dev/null 2>&1 || true
+            pacman -Syu --noconfirm --needed base-devel git
+            echo "--- uname: $(uname -m)"
+            echo "--- pacman.conf: $(grep -E "^Architecture" /etc/pacman.conf || echo auto)"
+            id -u builder >/dev/null 2>&1 || useradd -m builder
+            chown -R builder /work/aur
+            su builder -c "cd /work/aur && makepkg --noconfirm --nodeps --noprogressbar" 2>&1 | tail -20
+            echo "--- built package .PKGINFO:"
+            bsdtar -xOf /work/aur/genoffice-arch-bin-*.pkg.tar.zst .PKGINFO | grep -E "^(pkgver|arch)"
+            echo "--- payload ELF:"
+            bsdtar -xOf /work/aur/genoffice-arch-bin-*.pkg.tar.zst opt/GenOffice/genoffice 2>/dev/null | head -c 20 | od -An -tx1 || true
+            echo "--- pacman install test:"
+            pacman -U --noconfirm --nodeps /work/aur/genoffice-arch-bin-*.pkg.tar.zst
+            pacman -Qi genoffice-arch-bin | grep -E "Version|Architecture"
+          ' 2>&1 | tail -60
