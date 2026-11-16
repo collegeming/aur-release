@@ -16,15 +16,23 @@ maintainer = "colegeming <collegeming@outlook.com>"
 kind = "electron-updater"
 feed = "https://code.kimi.com/kimi-code/desktop/latest-linux.yml"
 
-[checksum]
-# The feed carries a base64 sha512 per artifact (the app verifies its own
-# downloads against it) and its URLs are version-stamped, so checking for a new
-# version costs one ~700-byte request instead of fetching the 110 MB installer.
-algorithm = "sha512"
+[build]
+# Linux desktop builds are x86_64 only: the feed has no arm64 entry and the
+# vendor ships no Linux arm64 artifact anywhere. We build both ourselves:
+#   x86_64 -- repack the vendor .deb unchanged;
+#   aarch64 -- same app payload, with the official Electron arm64 runtime
+#              swapped in and node-pty rebuilt for that ABI (the approach
+#              macOS-Terminal/deepseek-harness-desktop-linux uses for its
+#              macOS payload).
+# Scripts: packages/kimi-code-desktop-bin/build-<arch>.sh.
+kind = "self"
+repo = "collegeming/aur-release"
+release_tag = "aur-built-latest"
+arches = ["x86_64", "aarch64"]
 
-# Linux desktop builds are x86_64 only; AppImage/deb/rpm all ship x86_64.
+# Artifact names produced by our build scripts.
 [assets.x86_64]
-# Of the three formats the .deb is the friendliest to unpack: bsdtar reads the
-# ar container and the xz payload with no extra makedepends, and it carries the
-# vendor's dependency list.
-name = "KimiCode-{pkgver}-linux-amd64.deb"
+names = ["kimi-code-desktop-bin-{pkgver}-1-x86_64.pkg.tar.zst"]
+
+[assets.aarch64]
+names = ["kimi-code-desktop-bin-{pkgver}-1-aarch64.pkg.tar.zst"]

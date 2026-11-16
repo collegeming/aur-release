@@ -4,7 +4,7 @@ pkgname=kimi-code-desktop-bin
 pkgver={{pkgver}}
 pkgrel={{pkgrel}}
 pkgdesc='Kimi Code Desktop - GUI client for the Kimi Code agent (prebuilt binary)'
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url='https://kimi.com/code'
 license=('LicenseRef-proprietary')
 # The vendor's Debian Depends/Recommends, translated to Arch names. libuuid1
@@ -13,38 +13,26 @@ depends=('gtk3' 'libnotify' 'nss' 'libxss' 'libxtst' 'libsecret'
          'at-spi2-core' 'xdg-utils')
 optdepends=('libappindicator-gtk3: tray icon')
 options=('!strip')
-# Repackaged, not rebuilt: packaging the app is the vendor's job, and it loads
-# its bundled Electron runtime from this exact /opt path. The local filename is
-# version-tagged so makepkg's SRCDEST cannot hand back the previous version's
-# .deb under a version-independent vendor name.
-source_x86_64=("KimiCode-${pkgver}-linux-amd64.deb::{{url_asset_x86_64}}")
-sha512sums_x86_64=('{{sha512_x86_64}}')
-# Keep makepkg from unpacking the .deb itself (bsdtar would scatter its ar
-# members across $srcdir); package() unpacks data.tar deliberately.
-noextract=("KimiCode-${pkgver}-linux-amd64.deb")
-# The .deb also carries an AppArmor profile that exists to re-enable user
-# namespaces under Ubuntu's restriction; Arch has no such restriction, so
-# shipping it would only confuse apparmor_parser.
+
+# Both packages are assembled by this repository's build workflow (see [build]
+# in metadata.toml): x86_64 is the vendor payload repacked, aarch64 is the same
+# payload with the official Electron arm64 runtime and a rebuilt node-pty.
+# Installing needs no toolchain.
+source_x86_64=("kimi-code-desktop-bin-${pkgver}-1-x86_64.pkg.tar.zst::https://github.com/collegeming/aur-release/releases/download/aur-built-latest/{{asset_x86_64}}")
+sha256sums_x86_64=('{{sha256_x86_64}}')
+source_aarch64=("kimi-code-desktop-bin-${pkgver}-1-aarch64.pkg.tar.zst::https://github.com/collegeming/aur-release/releases/download/aur-built-latest/{{asset_aarch64}}")
+sha256sums_aarch64=('{{sha256_aarch64}}')
 
 package() {
-    install -d "${srcdir}/deb"
-    bsdtar -xf "${srcdir}/KimiCode-${pkgver}-linux-amd64.deb" -C "${srcdir}/deb"
-    bsdtar -xf "${srcdir}/deb/"data.tar.* -C "${pkgdir}"
+    local pkg
+    case "${CARCH}" in
+        x86_64)  pkg="kimi-code-desktop-bin-${pkgver}-1-x86_64.pkg.tar.zst" ;;
+        aarch64) pkg="kimi-code-desktop-bin-${pkgver}-1-aarch64.pkg.tar.zst" ;;
+    esac
 
-    # `/opt/Kimi Code` (space included) is where the bundled Electron looks for
-    # its resources. Electron refuses to start unless the sandbox helper is
-    # root-owned setuid when user namespaces are unavailable -- the vendor's
-    # postinst sets 4755 for exactly that case, and the bit is simply unused
-    # where namespaces do work.
-    install -d "${pkgdir}/usr/bin"
-    ln -s "/opt/Kimi Code/kimi-code" "${pkgdir}/usr/bin/kimi-code"
-    chmod 4755 "${pkgdir}/opt/Kimi Code/chrome-sandbox"
-
-    # The Electron/Chromium notices ship inside the app directory; link them
-    # rather than duplicating 20 MB under /usr/share/licenses.
-    install -d "${pkgdir}/usr/share/licenses/${pkgname}"
-    ln -s "/opt/Kimi Code/LICENSE.electron.txt" \
-        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.electron.txt"
-    ln -s "/opt/Kimi Code/LICENSES.chromium.html" \
-        "${pkgdir}/usr/share/licenses/${pkgname}/LICENSES.chromium.html"
+    # The source is already a pacman package: unpack its payload (minus the
+    # metadata files) straight into $pkgdir. Modes, including the setuid bit on
+    # chrome-sandbox, are preserved from the archive.
+    bsdtar -xf "${srcdir}/${pkg}" -C "${pkgdir}" \
+        --exclude '.PKGINFO' --exclude '.BUILDINFO' --exclude '.MTREE'
 }

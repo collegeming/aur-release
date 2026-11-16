@@ -218,7 +218,7 @@ def resolve_self_built_release(meta: dict, token: str | None) -> dict | None:
 
     # Version comes from upstream, so the package tracks upstream releases;
     # the binaries themselves are the ones we compiled.
-    upstream_tag = _latest_upstream_tag(meta, token)
+    upstream_tag = _upstream_version(meta, token)
 
     # Fetch the rolling release that holds our compiled packages.
     url = f"{GITHUB_API}/repos/{repo}/releases/tags/{build.get('release_tag', 'aur-built-latest')}"
@@ -283,6 +283,23 @@ def _latest_upstream_tag(meta: dict, token: str | None) -> str:
     raise UpdateError("no usable upstream tag found")
 
 
+def _upstream_version(meta: dict, token: str | None) -> str:
+    """Newest upstream version, regardless of where the manifest looks for it.
+
+    Self-built packages do not care whether upstream publishes GitHub releases
+    or only a vendor update feed; both are just a version signal. Feed-based
+    upstreams (Kimi Code Desktop) get their version from the same feed the app's
+    own updater reads.
+    """
+    upstream = meta.get("upstream") or {}
+    if upstream.get("kind") == "electron-updater":
+        feed = upstream.get("feed")
+        if not feed:
+            raise UpdateError('kind = "electron-updater" needs an [upstream] feed')
+        return parse_update_feed(http_get_text(feed, token))["version"]
+    return _latest_upstream_tag(meta, token)
+
+
 def resolve_release(meta: dict, token: str | None) -> dict | None:
     """Return the upstream release to package, or None if none is usable.
 
@@ -307,16 +324,20 @@ def resolve_release(meta: dict, token: str | None) -> dict | None:
     for upstreams that never publish GitHub releases at all.
     """
     upstream = meta["upstream"]
+
+    # Packages we compile ourselves: the version still comes from upstream, but
+    # the artifacts come from our own rolling release. This is orthogonal to how
+    # upstream is consulted (GitHub releases or a vendor update feed), so it is
+    # checked before the [upstream] kind dispatch.
+    if (meta.get("build") or {}).get("kind") == "self":
+        return resolve_self_built_release(meta, token)
+
     kind = upstream.get("kind", "github-releases")
     if kind == "electron-updater":
         return resolve_feed_release(meta, token)
     if kind != "github-releases":
         raise UpdateError(f"unknown [upstream] kind {kind!r}")
 
-    # Packages we compile ourselves: the version still comes from upstream, but
-    # the artifacts come from our own rolling release.
-    if (meta.get("build") or {}).get("kind") == "self":
-        return resolve_self_built_release(meta, token)
     include_prerelease = bool(upstream.get("prerelease"))
     url = (
         f"{GITHUB_API}/repos/{upstream['owner']}/{upstream['repo']}"
@@ -811,16 +832,40 @@ def do_resolve(pkg_dir: Path, token: str | None) -> int:
     workflow decides that by diffing against what the artifacts release holds.
     """
     meta = load_manifest(pkg_dir)
-    tag = _latest_upstream_tag(meta, token)
-    pkgver = compute_pkgver(meta, tag)
     upstream = meta["upstream"]
-    print(json.dumps({
+    tag = _upstream_version(meta, token)
+    pkgver = compute_pkgver(meta, tag)
+
+    out: dict = {
         "pkgname": meta["pkgname"],
         "tag": tag,
         "pkgver": pkgver,
-        "url": f"https://github.com/{upstream['owner']}/{upstream['repo']}",
-        "source_ref": tag,
-    }))
+    }
+    if upstream.get("kind") == "electron-updater":
+        # Feed-based upstreams have no GitHub repo. Expose the feed's file list
+        # so build scripts can download the vendor installer they repackage.
+        feed = upstream["feed"]
+        data = parse_update_feed(http_get_text(feed, token))
+        assets = []
+        for entry in data["files"]:
+            rel = entry.get("url")
+            if not rel:
+                continue
+            digest = None
+            for algo in ("sha512", "sha256"):
+                if entry.get(algo):
+                    digest = f"{algo}:{base64.b64decode(entry[algo]).hex()}"
+                    break
+            assets.append({
+                "name": rel.rsplit("/", 1)[-1],
+                "url": urllib.parse.urljoin(feed, rel),
+                "digest": digest,
+            })
+        out["assets"] = assets
+    else:
+        out["url"] = f"https://github.com/{upstream['owner']}/{upstream['repo']}"
+        out["source_ref"] = tag
+    print(json.dumps(out))
     return 0
 
 

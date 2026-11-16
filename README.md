@@ -11,10 +11,15 @@
   AUR 上已有一个 `kimi-code`，走 npm 方式安装、运行时要 nodejs；这里做的是官方「独立二进制」
   的 `-bin` 包，不依赖 Node.js。
 - [`kimi-code-desktop-bin`](packages/kimi-code-desktop-bin/) — 源 [Kimi Code 官网](https://kimi.com/code) 的**桌面客户端**，
-  `x86_64`。注意它和上面的 `kimi-code-bin` 是**两个不同产品、两条版本线**：桌面端是 GUI
+  `x86_64` + `aarch64`。注意它和上面的 `kimi-code-bin` 是**两个不同产品、两条版本线**：桌面端是 GUI
   （自带 Electron，版本 1.x），CLI 是终端工具（版本 2.x），两者可同时安装
   （分别占 `/usr/bin/kimi-code` 与 `/usr/bin/kimi`）。上游没有公开仓库、也不发 GitHub
   release，只有官网安装包，所以走的是它自带更新器的 feed（见下文 `kind`）。
+
+  > 厂商只发 Linux x86_64。aarch64 包由本仓库自建：取官方 x86_64 `.deb` 里的应用载荷
+  > （app.asar 与资源都是架构无关的），换上**官方 Electron arm64 运行时**，再把唯一的原生
+  > 模块 `node-pty` 按 Electron ABI 重编（思路参照
+  > `macOS-Terminal/deepseek-harness-desktop-linux` 对 macOS 载荷的处理）。
 
   > 桌面端的**内置更新器在 Arch 上不工作**：它按发行版包来区分（`resources/package-type`
   > 是 `deb`），升级时会去调 `dpkg`。装了本包之后请一律用 `pacman -Syu` 升级，应用里若
