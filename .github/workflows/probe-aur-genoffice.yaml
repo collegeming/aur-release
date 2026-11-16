@@ -54,12 +54,15 @@ jobs:
             id -u builder >/dev/null 2>&1 || useradd -m builder
             chown -R builder /work/aur
             su builder -c "cd /work/aur && makepkg --noconfirm --nodeps --noprogressbar"
+            echo "--- PKGEXT: $(grep -E '^PKGEXT' /etc/makepkg.conf || echo default)"
             echo "--- files in the build dir:"
-            ls -la /work/aur/*.pkg.tar.zst
+            ls -la /work/aur
             # Select the package makepkg built (pkgrel 2), not the raw upstream
             # artifact (pkgrel 1) that also sits in the build directory: pacman
-            # silently drops the second target for a duplicate pkgname.
-            BUILT=$(ls /work/aur/genoffice-arch-bin-*-2-aarch64.pkg.tar.zst)
+            # silently drops the second target for a duplicate pkgname. The
+            # extension is whatever PKGEXT says, not necessarily .zst.
+            BUILT=$(find /work/aur -maxdepth 1 -name 'genoffice-arch-bin-*2-*.pkg.tar*' | head -1)
+            [ -n "$BUILT" ] || { echo "::error::makepkg produced no package"; exit 1; }
             echo "--- built package: $BUILT"
             bsdtar -xOf "$BUILT" .PKGINFO | grep -E "^(pkgver|arch)"
             echo "--- payload ELF header (e_machine b7 00 = AArch64):"
