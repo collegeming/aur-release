@@ -284,6 +284,11 @@ jobs:
   trigger-aur-update:
     name: Trigger AUR update
     needs: [plan, publish]
+    # publish runs under always() so it can still publish when one arch was
+    # skipped (packages that forward some arches from upstream). Without an
+    # explicit condition here, GitHub propagates that skipped build job through
+    # `needs` and the dispatch job is skipped too.
+    if: always() && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch aur-update

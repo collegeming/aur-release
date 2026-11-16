@@ -14,12 +14,7 @@ maintainer = "colegeming <collegeming@outlook.com>"
 # auto-updater reads, named in the app's resources/app-update.yml:
 #   provider: generic, url: https://code.kimi.com/kimi-code/desktop/
 kind = "electron-updater"
-# Temporary pin while upstream's feed still points below the published AUR
-# version (vendor rolled 1.3.5 back to 1.3.3 after we had already published
-# 1.3.5-1, and AUR cannot downgrade). Restored to the real feed below once
-# 1.3.5-2 is out; see _feeds/kimi-1.3.5.yml.
-feed = "https://raw.githubusercontent.com/collegeming/aur-release/main/_feeds/kimi-1.3.5.yml"
-# feed = "https://code.kimi.com/kimi-code/desktop/latest-linux.yml"
+feed = "https://code.kimi.com/kimi-code/desktop/latest-linux.yml"
 
 [build]
 # The vendor ships Linux only for x86_64. We forward that .deb unchanged and
