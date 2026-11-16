@@ -58,11 +58,19 @@ jobs:
       - name: Rebuild node-pty for Electron arm64
         run: |
           VER=$(grep -a -o 'Electron/[0-9][0-9.]*' "$GITHUB_WORKSPACE/work/tree/kimi-code" | head -1 | cut -d/ -f2)
-          cd "$GITHUB_WORKSPACE/work/tree/resources/app.asar.unpacked/node_modules/node-pty"
-          npm install --ignore-scripts --no-audit --no-fund
+          echo "building node-pty against Electron $VER (arm64)"
+          mkdir -p "$GITHUB_WORKSPACE/work/ptybuild" && cd "$GITHUB_WORKSPACE/work/ptybuild"
+          npm init -y >/dev/null
+          # The packaged app ships only the compiled node-pty, not binding.gyp or
+          # src/, so build a fresh copy from the published tarball.
+          npm install node-pty@1.1.0 --ignore-scripts --no-audit --no-fund
+          cd node_modules/node-pty
           npx --yes node-gyp rebuild --arch=arm64 --target="$VER" \
             --dist-url=https://electronjs.org/headers
           file build/Release/pty.node
+          cp build/Release/pty.node \
+            "$GITHUB_WORKSPACE/work/tree/resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node"
+          file "$GITHUB_WORKSPACE/work/tree/resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node"
 
       - name: Smoke test the runtime
         run: |
